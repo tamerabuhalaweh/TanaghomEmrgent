@@ -67,6 +67,46 @@ Additions to backend/server.py without touching UI design:
 - Actual analytics import connectors (post metric ingestion)
 - Multi-workspace UI (tenants are foundation only — no create-workspace UI yet)
 
+## Patch 2 — Verified Event KPI Import (2026-07-04)
+Adds the verified-metrics data layer. No external API calls yet.
+
+### Backend
+- New `event_kpi_records` collection with strict validation (`_validate_kpi_row`):
+  - channels: `meta / instagram / youtube / whatsapp / email / organic / dark_ad / referral / manual / other`
+  - source_type: `manual / csv_import / connector`
+  - non-negative integers/floats; `metric_date` must be `YYYY-MM-DD`
+  - all-zero rows only accepted when `source_type=manual` AND `notes` is non-empty
+- Endpoints (tenant-scoped, audited):
+  - `GET /api/events/{id}/kpis` with optional filters `channel`, `source_type`, `start_date`, `end_date`
+  - `POST /api/events/{id}/kpis` (admin+marketing; server forces `source_type=manual`)
+  - `PATCH /api/events/{id}/kpis/{kpi_id}` (admin+marketing; re-validates merged state)
+  - `DELETE /api/events/{id}/kpis/{kpi_id}` (admin only)
+  - `POST /api/events/{id}/kpis/csv/dry-run` (validate + preview_totals, no writes)
+  - `POST /api/events/{id}/kpis/csv/import` (atomic: reject whole payload if any row invalid; else insert with `source_type=csv_import`)
+- Audit actions added: `event_kpi_created / updated / deleted`, `event_kpi_csv_dry_run`, `event_kpi_csv_imported` — metadata only contains counts/event_id + a redacted notes preview (never the raw rows).
+- Dashboards rewritten (`_kpi_aggregate` + `_lead_metrics` + `_campaign_budget`):
+  - Global + per-event now aggregate from `event_kpi_records` only. Post metrics no longer feed the dashboard.
+  - Returns real totals for reach / impressions / interactions / clicks / form_completions / leads / meetings_booked / meetings_attended / no_shows / purchases / spend / revenue.
+  - Derived: `roi_percent`, `form_completion_rate`, `lead_to_purchase_rate`, `meeting_show_rate`, `cost_per_lead`, `cost_per_purchase`, `budget_variance`.
+  - `channel_breakdown`, `source_type_breakdown`, and `trend` (grouped by `metric_date`).
+  - `metrics_status: no_verified_metrics` when zero KPI records exist.
+
+### Frontend
+- `EventKpiPanel.jsx` (new) — Verified KPI Records table (empty state, delete row), Add KPI Record modal (all 12 numeric fields + channel + notes), CSV Import Preview panel (textarea for JSON rows, `Validate Import` → dry-run preview totals + row errors, `Import Valid Rows` enabled only if zero errors, "No external platform is called" callout).
+- `EventDetail.jsx` — panel wired in above Campaigns section; shows green "Verified KPI data" banner or orange "Verified metrics pending" banner based on `metrics_status`.
+- `Dashboard.jsx` — same verified/pending banner treatment; text now says "Add manual KPI data or import a CSV to populate performance metrics." (removed language implying live social sync).
+
+### Testing
+- **66/66 backend tests passing** (43 pre-existing + 23 new for Patch 2).
+- Covers: KPI CRUD + RBAC (marketing/sales/viewer/admin), validation (negatives / unknown channel / unknown source_type / all-zero with & without notes / bad date), tenant isolation (cross-tenant KPI, cross-tenant campaign_id → 400, global dashboard tenant-scoped), CSV dry-run (no writes, per-row errors, audit counts only), CSV import (atomic reject, happy-path insert with `source_type=csv_import`), dashboard aggregation + derived rates + divide-by-zero, secret sanitization (notes with `api_key=…` redacted to `[redacted-notes]`).
+
+### Still deferred (out of Patch 2)
+- Real GoHighLevel / Meta / YouTube / Formaloo / WhatsApp connectors
+- File-upload CSV parsing (front end currently uses a JSON textarea — good enough for verified dry-run/import; a proper CSV-file uploader ships in a later patch)
+- Splitting `server.py` (1679 lines) into per-domain routers
+- `@app.on_event` → FastAPI `lifespan` migration
+- Frontend "Import Valid Rows" respecting per-row invalid dropping (currently import is atomic on the whole payload — matches the backend contract)
+
 ## Backlog
 ### P0 — after MVP feedback
 - Streaming SSE for AI generation (currently non-streaming)

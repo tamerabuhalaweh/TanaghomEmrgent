@@ -1083,10 +1083,17 @@ async def update_lead(lid: str, body: dict, actor: dict = Depends(require_role("
 # ---------------------------------------------------------------------------
 # Routes: Event KPI records (verified metrics layer)
 # ---------------------------------------------------------------------------
+import re
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _validate_kpi_row(row: dict) -> Optional[str]:
     """Return an error string or None. Applies structural + range rules."""
     if not row.get("metric_date"):
         return "metric_date is required"
+    if not _DATE_RE.match(str(row.get("metric_date", ""))):
+        return "metric_date must be YYYY-MM-DD"
     if row.get("channel") not in KPI_CHANNELS:
         return f"unknown channel: {row.get('channel')!r} (allowed: {', '.join(KPI_CHANNELS)})"
     for f in KPI_NUMERIC_FIELDS:
@@ -1156,6 +1163,9 @@ async def list_kpis(
             raise HTTPException(400, "unknown source_type filter")
         q["source_type"] = source_type
     if start_date or end_date:
+        for s in (start_date, end_date):
+            if s and not _DATE_RE.match(s):
+                raise HTTPException(400, "start_date/end_date must be YYYY-MM-DD")
         date_q: dict = {}
         if start_date:
             date_q["$gte"] = start_date
@@ -1510,7 +1520,7 @@ async def dashboard_global(user: dict = Depends(current_user)):
         "revenue": revenue,
         "roi_percent": roi,
         # Legacy funnel counts from leads collection (unchanged)
-        "total_leads": lm["total_leads_collection"] + totals["leads"] if False else totals["leads"],
+        "total_leads": totals["leads"],
         "leads_new": lm["leads_new"],
         "leads_form_filled": lm["leads_form_filled"],
         "leads_booked": lm["leads_booked"],
