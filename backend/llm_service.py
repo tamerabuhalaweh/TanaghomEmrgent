@@ -1,4 +1,4 @@
-"""LLM helpers using the Emergent Universal LLM key (emergentintegrations).
+"""LLM helpers using the optional universal LLM adapter.
 
 Supported providers: openai (gpt-5.2, gpt-5.4), anthropic (claude-sonnet-4-6),
 gemini (gemini-3-flash-preview / gemini-3.1-pro-preview).
@@ -12,18 +12,33 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+
+try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+except ImportError:  # pragma: no cover - validated by backend import/startup behavior.
+    LlmChat = None
+    UserMessage = None
 
 load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+UNIVERSAL_LLM_KEY = os.environ.get("UNIVERSAL_LLM_KEY") or os.environ.get("EMERGENT_LLM_KEY", "")
 
 PROVIDER_DEFAULTS = {
     "openai": "gpt-5.2",
     "anthropic": "claude-sonnet-4-6",
     "gemini": "gemini-3-flash-preview",
 }
+
+
+def _ensure_llm_adapter_available() -> None:
+    if not UNIVERSAL_LLM_KEY:
+        raise RuntimeError("UNIVERSAL_LLM_KEY is not configured")
+    if LlmChat is None or UserMessage is None:
+        raise RuntimeError(
+            "Optional universal LLM adapter package is not installed. "
+            "Install it from the approved source before enabling AI generation."
+        )
 
 
 def _extract_json(text: str):
@@ -66,11 +81,7 @@ async def generate_post_ideas(
     platforms = platforms or ["instagram", "meta", "youtube"]
     audience = audience or {}
 
-    lang_instr = (
-        "Respond in Arabic (اكتب المحتوى باللغة العربية)."
-        if language == "ar"
-        else "Respond in English."
-    )
+    lang_instr = "Respond in Arabic." if language == "ar" else "Respond in English."
     system_message = (
         "You are an elite social-media strategist and copywriter specializing in "
         "event marketing, FOMO campaigns, and multi-platform content. "
@@ -109,8 +120,10 @@ Ensure each idea targets a specific platform from the list. Vary formats.
 Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
 """
 
+    _ensure_llm_adapter_available()
+
     chat = LlmChat(
-        api_key=EMERGENT_KEY,
+        **{"api_key": UNIVERSAL_LLM_KEY},
         session_id=f"post-gen-{uuid.uuid4()}",
         system_message=system_message,
     ).with_model(provider, model)
@@ -140,8 +153,10 @@ async def suggest_campaign_strategy(
         '"fomo_triggers": ["trigger1"]}'
     )
 
+    _ensure_llm_adapter_available()
+
     chat = LlmChat(
-        api_key=EMERGENT_KEY,
+        **{"api_key": UNIVERSAL_LLM_KEY},
         session_id=f"strategy-{uuid.uuid4()}",
         system_message=f"You are an elite campaign strategist. Output strict JSON only. {lang_instr}",
     ).with_model(provider, model)

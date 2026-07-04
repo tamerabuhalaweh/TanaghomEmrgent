@@ -45,7 +45,7 @@ def _block_real_http():
         original_init(self, *args, **kwargs)
         # Only override outbound methods; TestClient uses sync client
         self.__aenter__ = _raise  # type: ignore
-    # We intentionally do NOT override — TestClient uses sync httpx transports.
+    # We intentionally do NOT override - TestClient uses sync httpx transports.
     # The monkeypatch on ghl_client.fetch_* is the primary defense.
     yield
 
@@ -333,7 +333,7 @@ class TestMappingTenantIsolation:
         assert not any(m["id"] == tb_mid for m in la)
         # Delete from A must return 404 (not found in A) and NOT delete
         rd = client.delete(f"/api/ghl/mappings/{tb_mid}", headers=admin_headers)
-        # Route returns {"deleted": 0} — 200 with 0 count is acceptable, but code
+        # Route returns {"deleted": 0} - 200 with 0 count is acceptable, but code
         # returns 200 always. We check that B still has the mapping.
         lb2 = client.get("/api/ghl/mappings", headers=tenant_b["headers"]).json()
         assert any(m["id"] == tb_mid for m in lb2), \

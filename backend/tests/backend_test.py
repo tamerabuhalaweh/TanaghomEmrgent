@@ -1,4 +1,4 @@
-"""Backend API tests for AI Campaign Manager — Patch 1: production foundation.
+"""Backend API tests for AI Campaign Manager - Patch 1: production foundation.
 
 Covers: auth + JWT tenant claim, tenant isolation, audit logs, honest metrics,
 secret masking, CORS, and env validation.
@@ -16,8 +16,7 @@ from pathlib import Path
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
-            or "https://campaign-forge-142.preview.emergentagent.com").rstrip("/")
+BASE_URL = (os.environ.get("API_BASE_URL") or "http://localhost:8001").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@campaign.ai"

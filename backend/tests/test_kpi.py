@@ -9,8 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
-            or "https://campaign-forge-142.preview.emergentagent.com").rstrip("/")
+BASE_URL = (os.environ.get("API_BASE_URL") or "http://localhost:8001").rstrip("/")
 API = f"{BASE_URL}/api"
 ADMIN_EMAIL = "admin@campaign.ai"
 ADMIN_PASS = "Admin@12345"

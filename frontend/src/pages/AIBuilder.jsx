@@ -48,7 +48,7 @@ export default function AIBuilder() {
       setCampaigns(data);
       if (data.length && !campaignId) setCampaignId(data[0].id);
     })();
-  }, [eventId]);
+  }, [eventId, campaignId]);
 
   const togglePlatform = (p) =>
     setSelectedPlatforms((s) => (s.includes(p) ? s.filter((x) => x !== p) : [...s, p]));

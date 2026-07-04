@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: tanaghum_ci
+      JWT_SECRET: ci-jwt-secret-change-in-production
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8001
+      GHL_READ_SYNC_ENABLED: "false"
+      API_BASE_URL: http://localhost:8001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Generate test Fernet key
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from cryptography.fernet import Fernet
+          print(f"FERNET_KEY={Fernet.generate_key().decode()}")
+          PY
+      - name: Write CI backend .env
+        working-directory: backend
+        run: |
+          cat > .env <<EOF
+          MONGO_URL=${MONGO_URL}
+          DB_NAME=${DB_NAME}
+          JWT_SECRET=${JWT_SECRET}
+          FERNET_KEY=${FERNET_KEY}
+          CORS_ORIGINS=${CORS_ORIGINS}
+          GHL_READ_SYNC_ENABLED=${GHL_READ_SYNC_ENABLED}
+          UNIVERSAL_LLM_KEY=
+          EMERGENT_LLM_KEY=
+          EOF
+      - name: Start backend
+        working-directory: backend
+        run: |
+          python -m uvicorn server:app --host 0.0.0.0 --port 8001 &
+          for i in {1..30}; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/api/auth/me || true)"
+            if [ "$code" != "000" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend did not become reachable"
+          exit 1
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest tests -q -n 0
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          CI: "true"
+          VITE_API_BASE_URL: http://localhost:8001
+        run: npm run build
+
+  guardrails:
+    name: Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for mojibake
+        run: |
+          if grep -RInE 'Â|â|�' backend frontend/src memory README.md test_reports 2>/dev/null; then
+            echo "Mojibake detected"
+            exit 1
+          fi
+      - name: Check for obvious committed secrets
+        run: |
+          if git grep -nE '(ghp_|sk_live_|x-api-key: sk_|api_key=[A-Za-z0-9_-]{16,})' -- ':!test_reports' ':!backend/tests' ':!.github/workflows/ci.yml'; then
+            echo "Potential secret detected"
+            exit 1
+          fi
