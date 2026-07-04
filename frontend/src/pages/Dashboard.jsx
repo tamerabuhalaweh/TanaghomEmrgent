@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Megaphone,
   ArrowRight,
+  Info,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -55,6 +56,24 @@ export default function Dashboard() {
           </button>
         }
       />
+
+      {data?.metrics_status === "no_verified_metrics" && (
+        <div
+          className="mb-6 card-flat p-4 flex items-start gap-3 border-orange-200 bg-orange-50/60"
+          data-testid="dashboard-metrics-banner"
+        >
+          <Info className="w-4 h-4 mt-0.5 text-orange-600 shrink-0" />
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              Verified metrics pending
+            </div>
+            <div className="text-xs text-slate-600 mt-0.5">
+              {data.metrics_message ||
+                "Connect analytics or import KPI data to populate performance metrics."}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI bento row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-8">

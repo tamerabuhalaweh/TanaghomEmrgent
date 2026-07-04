@@ -1,0 +1,27 @@
+{
+  "summary": "Patch 1 (production foundation) backend tests — 43/43 passing. Covers JWT tenant claim, tenant isolation across events/audit-logs/llm-keys, audit log write for login success/failure and mutations, secret masking + audit sanitization (raw secret never appears in GET /llm-keys or /audit-logs), honest metrics (post reach=0/metric_source='none' on create, PATCH reach sets 'manual', dashboards return metrics_status='no_verified_metrics' when nothing verified and 'verified' after manual override), integration status='credential_saved' with kind whitelist (invalid_kind -> 400), CORS (verified backend directly at localhost:8001: evil origin NOT reflected, localhost:3000 IS reflected), env validation (.env has no wildcard, server.py rejects '*').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py at 1195 lines is well over the 700-line threshold — should be split into routers (auth, users, events, campaigns, posts, leads, settings, integrations, dashboards, audit).",
+    "@app.on_event('startup')/('shutdown') are deprecated in FastAPI — migrate to lifespan context manager.",
+    "PATCH /events, /campaigns, /leads still accept a raw dict body — although reserved fields (id/_id/created_at/tenant_id) are stripped, arbitrary fields are still allowed. Consider dedicated Pydantic Update models like Users/Posts have.",
+    "Public-URL CORS is governed by the ingress/edge proxy which currently returns '*' regardless of backend config. Backend middleware itself is correct (verified via localhost:8001). If strict edge CORS is required, that needs to be configured at the ingress layer — outside the app scope but worth flagging.",
+    "audit() swallows Mongo errors silently (only logs) — acceptable for non-blocking audit but consider a fallback queue or metric so audit-write failures are observable in production."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (rewritten: added 13 new tests for tenant isolation, audit logs, honest metrics, secret masking, CORS, env validation; updated Post & Integration expectations)"
+  ],
+  "success_rate": {"backend": "100% (43/43)", "frontend": "not tested"},
+  "test_credentials": "admin@campaign.ai / Admin@12345 (default tenant, seeded on startup). Second tenant admin is created directly in Mongo per test session and cleaned up afterwards.",
+  "seed_data_creation": "Session fixture inserts a second tenant + admin + event directly via motor. All TEST_-prefixed docs and the second tenant are deleted at session end.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Test suite runs in parallel (xdist auto). Second-tenant fixture requires access to MONGO_URL/DB_NAME from backend/.env. CORS assertion hits http://localhost:8001 directly because ingress rewrites Access-Control-Allow-Origin to '*' on the public URL. FERNET_KEY in backend/.env is valid; do not rotate without wiping llm_keys/social_accounts/integrations. Dashboard verified-metric test creates a persistent post with manual reach=5000 in tenant 1 — subsequent runs will still see metrics_status='verified' unless collections cleaned.",
+  "rca of the issue": "N/A — no bugs found. Three initial test-authoring bugs fixed inline: (1) email case (backend lowercases on create), (2)/(3) CORS test hit public URL which is proxied through an ingress that returns wildcard; retargeted at localhost:8001 to test the actual FastAPI middleware."
+}

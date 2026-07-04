@@ -3,7 +3,7 @@ import { PageHeader } from "../components/ui-bits";
 import Modal from "../components/Modal";
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { Plus, Trash2, Plug, CheckCircle2 } from "lucide-react";
+import { Plus, Trash2, Plug, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 
 const KINDS = [
@@ -47,7 +47,7 @@ export default function Integrations() {
     <div className="p-6 md:p-10 max-w-[1400px] mx-auto" data-testid="integrations-page">
       <PageHeader
         title={t("integrations")}
-        subtitle="Connect external CRMs and automation platforms."
+        subtitle="Store CRM / automation credentials. Storing a credential does NOT enable live sync — that ships in a later patch."
         actions={
           <button onClick={() => setOpen(true)} className="btn btn-primary" data-testid="integrations-new-btn">
             <Plus className="w-4 h-4" /> {t("addIntegration")}
@@ -66,13 +66,23 @@ export default function Integrations() {
                   <Plug className="w-4 h-4 text-orange-400" />
                 </div>
                 {active && (
-                  <span className="badge-pill badge-green flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> Connected
+                  <span
+                    className="badge-pill badge-slate flex items-center gap-1"
+                    data-testid={`integration-status-${k.v}`}
+                    title="Credentials are stored but live sync is not enabled yet."
+                  >
+                    <ShieldAlert className="w-3 h-3" /> Credential saved
                   </span>
                 )}
               </div>
               <div className="mt-4 font-bold text-slate-900">{k.label}</div>
               <p className="mt-1 text-xs text-slate-500">{k.desc}</p>
+              {active && (
+                <div className="mt-3 space-y-1 text-[11px] text-slate-500" data-testid={`integration-notes-${k.v}`}>
+                  <div>• Not validated</div>
+                  <div>• Live sync not enabled</div>
+                </div>
+              )}
               <button
                 onClick={() => {
                   setForm({ kind: k.v, label: k.label, api_key: "", webhook_url: "" });
@@ -81,7 +91,7 @@ export default function Integrations() {
                 className={`mt-4 btn ${active ? "btn-outline" : "btn-primary"} !py-1.5 !px-3 text-xs w-full justify-center`}
                 data-testid={`integration-catalog-${k.v}-connect`}
               >
-                {active ? "Reconnect" : t("connectedTo").replace(t("connectedTo"), "Connect")}
+                {active ? "Update credentials" : "Save credentials"}
               </button>
             </div>
           );
@@ -91,7 +101,7 @@ export default function Integrations() {
       {/* Active */}
       <div className="card-flat overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100 text-[10px] uppercase tracking-widest text-slate-500 font-bold">
-          Active Integrations
+          Saved Credentials
         </div>
         {items.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">{t("noData")}</div>
@@ -102,6 +112,13 @@ export default function Integrations() {
                 <tr key={i.id} className="border-t border-slate-100" data-testid={`integration-row-${i.id}`}>
                   <td className="py-3 px-5 font-semibold text-slate-900">{i.label}</td>
                   <td className="py-3 px-5"><span className="badge-pill badge-blue">{i.kind}</span></td>
+                  <td className="py-3 px-5">
+                    <div className="flex flex-wrap gap-1" data-testid={`integration-row-status-${i.id}`}>
+                      <span className="badge-pill badge-slate">Credential saved</span>
+                      {!i.validated && <span className="badge-pill badge-orange">Not validated</span>}
+                      {!i.live_sync_enabled && <span className="badge-pill badge-slate">Live sync off</span>}
+                    </div>
+                  </td>
                   <td className="py-3 px-5 mono text-xs text-slate-500">{i.api_key_masked || i.webhook_url || "—"}</td>
                   <td className="py-3 px-5 text-end">
                     <button onClick={() => del(i.id)} className="btn btn-danger !p-1.5"

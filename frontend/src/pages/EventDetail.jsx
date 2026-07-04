@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import Modal from "../components/Modal";
 import {
-  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin,
+  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -165,6 +165,24 @@ export default function EventDetail() {
       </div>
 
       <div className="p-6 md:p-10 max-w-[1400px] mx-auto">
+        {dash?.metrics_status === "no_verified_metrics" && (
+          <div
+            className="mb-6 card-flat p-4 flex items-start gap-3 border-orange-200 bg-orange-50/60"
+            data-testid="event-metrics-banner"
+          >
+            <Info className="w-4 h-4 mt-0.5 text-orange-600 shrink-0" />
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                Verified metrics pending
+              </div>
+              <div className="text-xs text-slate-600 mt-0.5">
+                {dash.metrics_message ||
+                  "Connect analytics or import KPI data to populate performance."}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Funnel KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mb-8 -mt-16 relative z-10">
           {funnelStages.map((s, i) => (
