@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { PageHeader, KpiCard, SectionTitle, currency, nfmt } from "../components/ui-bits";
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import ChartFrame from "../components/ChartFrame";
 import {
   Users2,
   DollarSign,
@@ -15,7 +16,6 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import {
-  ResponsiveContainer,
   AreaChart,
   Area,
   XAxis,
@@ -127,49 +127,47 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-8 card-flat p-5 rise-in" data-testid="trend-chart">
           <SectionTitle>{t("performanceTrend")}</SectionTitle>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data?.trend || []}>
-                <defs>
-                  <linearGradient id="rr" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#2563EB" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="#2563EB" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="ee" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#F97316" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="#F97316" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#E2E8F0" vertical={false} />
-                <XAxis dataKey="date" tickFormatter={(d) => d?.slice(5)} />
-                <YAxis />
-                <Tooltip
-                  contentStyle={{
-                    background: "white",
-                    border: "1px solid #E2E8F0",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="reach"
-                  stroke="#2563EB"
-                  strokeWidth={2}
-                  fill="url(#rr)"
-                  name={t("reach")}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="engagement"
-                  stroke="#F97316"
-                  strokeWidth={2}
-                  fill="url(#ee)"
-                  name={t("engagement")}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <ChartFrame className="h-72">
+            <AreaChart data={data?.trend || []}>
+              <defs>
+                <linearGradient id="rr" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#2563EB" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#2563EB" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="ee" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#F97316" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#F97316" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#E2E8F0" vertical={false} />
+              <XAxis dataKey="date" tickFormatter={(d) => d?.slice(5)} />
+              <YAxis />
+              <Tooltip
+                contentStyle={{
+                  background: "white",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}
+              />
+              <Area
+                type="monotone"
+                dataKey="reach"
+                stroke="#2563EB"
+                strokeWidth={2}
+                fill="url(#rr)"
+                name={t("reach")}
+              />
+              <Area
+                type="monotone"
+                dataKey="engagement"
+                stroke="#F97316"
+                strokeWidth={2}
+                fill="url(#ee)"
+                name={t("engagement")}
+              />
+            </AreaChart>
+          </ChartFrame>
         </div>
 
         <div className="lg:col-span-4 space-y-4">

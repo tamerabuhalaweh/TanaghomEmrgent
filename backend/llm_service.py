@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from dotenv import load_dotenv
 
 try:
@@ -27,18 +28,31 @@ UNIVERSAL_LLM_KEY = os.environ.get("UNIVERSAL_LLM_KEY") or os.environ.get("EMERG
 PROVIDER_DEFAULTS = {
     "openai": "gpt-5.2",
     "anthropic": "claude-sonnet-4-6",
-    "gemini": "gemini-3-flash-preview",
+    "gemini": "gemini-2.5-flash",
 }
 
 
-def _ensure_llm_adapter_available() -> None:
-    if not UNIVERSAL_LLM_KEY:
-        raise RuntimeError("UNIVERSAL_LLM_KEY is not configured")
+class LLMProviderError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _resolve_api_key(api_key: Optional[str] = None) -> str:
+    resolved = api_key or UNIVERSAL_LLM_KEY
+    if not resolved:
+        raise RuntimeError("Tenant LLM key or UNIVERSAL_LLM_KEY is not configured")
+    return resolved
+
+
+def _ensure_llm_adapter_available(api_key: Optional[str] = None) -> str:
+    resolved_key = _resolve_api_key(api_key)
     if LlmChat is None or UserMessage is None:
         raise RuntimeError(
             "Optional universal LLM adapter package is not installed. "
             "Install it from the approved source before enabling AI generation."
         )
+    return resolved_key
 
 
 def _extract_json(text: str):
@@ -65,10 +79,74 @@ def _extract_json(text: str):
     return None
 
 
+def _extract_gemini_text(payload: dict) -> str:
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return ""
+    content = candidates[0].get("content") or {}
+    parts = content.get("parts") or []
+    return "\n".join(str(part.get("text", "")) for part in parts if part.get("text")).strip()
+
+
+async def _send_gemini_message(
+    *,
+    api_key: str,
+    model: str,
+    system_message: str,
+    user_prompt: str,
+) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_message}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+        },
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            url,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        message = "Gemini API request failed"
+        status_code = 502
+        try:
+            payload = response.json()
+            error = payload.get("error") or {}
+            upstream_message = str(error.get("message") or "").strip()
+            upstream_status = str(error.get("status") or "").strip()
+        except Exception:
+            upstream_message = response.text[:300]
+            upstream_status = ""
+
+        if response.status_code == 429 or upstream_status == "RESOURCE_EXHAUSTED":
+            message = (
+                "Gemini billing or quota is exhausted for the configured tenant key. "
+                "Add credits or replace the key in AI Settings, then try again."
+            )
+            status_code = 402
+        elif response.status_code in (400, 401, 403):
+            message = (
+                "Gemini rejected the configured tenant key or model. "
+                "Check the provider, API key, model name, and project permissions in AI Settings."
+            )
+            status_code = 400
+        elif upstream_message:
+            message = f"Gemini API request failed: {upstream_message[:180]}"
+        raise LLMProviderError(message, status_code=status_code)
+    text = _extract_gemini_text(response.json())
+    if not text:
+        raise RuntimeError("Gemini API returned no text content")
+    return text
+
+
 async def generate_post_ideas(
     prompt: str,
     provider: str = "openai",
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
     platforms: Optional[list] = None,
     audience: Optional[dict] = None,
     goal: str = "max_reach",
@@ -120,10 +198,24 @@ Ensure each idea targets a specific platform from the list. Vary formats.
 Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
 """
 
-    _ensure_llm_adapter_available()
+    resolved_key = _resolve_api_key(api_key)
+
+    if provider == "gemini":
+        resp = await _send_gemini_message(
+            api_key=resolved_key,
+            model=model,
+            system_message=system_message,
+            user_prompt=user_prompt,
+        )
+        parsed = _extract_json(resp) or []
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed
+
+    _ensure_llm_adapter_available(resolved_key)
 
     chat = LlmChat(
-        **{"api_key": UNIVERSAL_LLM_KEY},
+        **{"api_key": resolved_key},
         session_id=f"post-gen-{uuid.uuid4()}",
         system_message=system_message,
     ).with_model(provider, model)
@@ -139,6 +231,7 @@ async def suggest_campaign_strategy(
     prompt: str,
     provider: str = "openai",
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
     language: str = "en",
 ) -> dict:
     """Generate a campaign strategy blueprint (topics, funnel steps)."""
@@ -153,10 +246,21 @@ async def suggest_campaign_strategy(
         '"fomo_triggers": ["trigger1"]}'
     )
 
-    _ensure_llm_adapter_available()
+    resolved_key = _resolve_api_key(api_key)
+
+    if provider == "gemini":
+        resp = await _send_gemini_message(
+            api_key=resolved_key,
+            model=model,
+            system_message=f"You are an elite campaign strategist. Output strict JSON only. {lang_instr}",
+            user_prompt=f"Build a marketing strategy for this brief. Return JSON schema:\n{schema}\n\nBrief:\n{prompt}",
+        )
+        return _extract_json(resp) or {}
+
+    _ensure_llm_adapter_available(resolved_key)
 
     chat = LlmChat(
-        **{"api_key": UNIVERSAL_LLM_KEY},
+        **{"api_key": resolved_key},
         session_id=f"strategy-{uuid.uuid4()}",
         system_message=f"You are an elite campaign strategist. Output strict JSON only. {lang_instr}",
     ).with_model(provider, model)

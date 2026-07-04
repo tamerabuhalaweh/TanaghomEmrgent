@@ -4,13 +4,14 @@ import { PageHeader, KpiCard, SectionTitle, currency, nfmt } from "../components
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import Modal from "../components/Modal";
+import ChartFrame from "../components/ChartFrame";
 import EventKpiPanel from "../components/EventKpiPanel";
 import PlannerSection from "../components/PlannerSection";
 import {
   Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
 } from "lucide-react";
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
 import { toast } from "sonner";
@@ -245,22 +246,20 @@ export default function EventDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
           <div className="lg:col-span-7 card-flat p-5">
             <SectionTitle>{t("plannedVsActual")}</SectionTitle>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={budgetData}>
-                  <CartesianGrid stroke="#E2E8F0" vertical={false} />
-                  <XAxis dataKey="label" />
-                  <YAxis />
-                  <Tooltip
-                    contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
-                  />
-                  <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                    <Cell fill="#0F172A" />
-                    <Cell fill="#F97316" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ChartFrame className="h-64">
+              <BarChart data={budgetData}>
+                <CartesianGrid stroke="#E2E8F0" vertical={false} />
+                <XAxis dataKey="label" />
+                <YAxis />
+                <Tooltip
+                  contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
+                />
+                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                  <Cell fill="#0F172A" />
+                  <Cell fill="#F97316" />
+                </Bar>
+              </BarChart>
+            </ChartFrame>
           </div>
 
           <div className="lg:col-span-5 card-flat p-5">
@@ -270,28 +269,26 @@ export default function EventDetail() {
                 {t("noData")}
               </div>
             ) : (
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={platformData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={50}
-                      outerRadius={90}
-                      paddingAngle={2}
-                    >
-                      {platformData.map((_, i) => (
-                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
-                    />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+              <ChartFrame className="h-64">
+                <PieChart>
+                  <Pie
+                    data={platformData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={90}
+                    paddingAngle={2}
+                  >
+                    {platformData.map((_, i) => (
+                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Legend />
+                </PieChart>
+              </ChartFrame>
             )}
           </div>
         </div>

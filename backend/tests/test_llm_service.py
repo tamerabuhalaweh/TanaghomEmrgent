@@ -1,0 +1,122 @@
+import asyncio
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import llm_service
+
+
+class _FakeGeminiResponse:
+    status_code = 200
+    text = "ok"
+
+    def json(self):
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '[{"platform":"instagram","format":"reel","hook":"Hook","caption":"Caption","cta":"Register","hashtags":["#event"],"reasoning":"Relevant"}]'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+
+class _FakeGeminiQuotaResponse:
+    status_code = 429
+    text = '{"error":{"status":"RESOURCE_EXHAUSTED","message":"credits depleted"}}'
+
+    def json(self):
+        return {
+            "error": {
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "credits depleted",
+            }
+        }
+
+
+def test_gemini_generation_uses_tenant_key_without_universal_key(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return _FakeGeminiResponse()
+
+    monkeypatch.setattr(llm_service, "UNIVERSAL_LLM_KEY", "")
+    monkeypatch.setattr(llm_service.httpx, "AsyncClient", FakeAsyncClient)
+
+    ideas = asyncio.run(
+        llm_service.generate_post_ideas(
+            prompt="Sell a live course event",
+            provider="gemini",
+            model="gemini-2.5-flash",
+            api_key="tenant-gemini-key",
+            platforms=["instagram"],
+        )
+    )
+
+    assert ideas[0]["platform"] == "instagram"
+    assert calls
+    assert calls[0]["headers"]["x-goog-api-key"] == "tenant-gemini-key"
+    assert "models/gemini-2.5-flash:generateContent" in calls[0]["url"]
+
+
+def test_gemini_quota_error_is_actionable(monkeypatch):
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, json):
+            return _FakeGeminiQuotaResponse()
+
+    monkeypatch.setattr(llm_service.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(llm_service.LLMProviderError) as exc:
+        asyncio.run(
+            llm_service.generate_post_ideas(
+                prompt="Sell a live course event",
+                provider="gemini",
+                model="gemini-2.5-flash",
+                api_key="tenant-gemini-key",
+                platforms=["instagram"],
+            )
+        )
+
+    assert exc.value.status_code == 402
+    assert "billing or quota is exhausted" in str(exc.value)
+
+
+def test_generation_requires_tenant_or_universal_key(monkeypatch):
+    monkeypatch.setattr(llm_service, "UNIVERSAL_LLM_KEY", "")
+
+    with pytest.raises(RuntimeError, match="Tenant LLM key or UNIVERSAL_LLM_KEY"):
+        asyncio.run(
+            llm_service.generate_post_ideas(
+                prompt="Sell a live course event",
+                provider="gemini",
+                model="gemini-2.5-flash",
+            )
+        )
