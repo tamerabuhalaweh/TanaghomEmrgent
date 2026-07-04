@@ -16,6 +16,7 @@ const PROVIDERS = [
   { v: "openai", label: "OpenAI · GPT-5.2" },
   { v: "anthropic", label: "Anthropic · Claude Sonnet 4.6" },
   { v: "gemini", label: "Google · Gemini 3 Flash" },
+  { v: "gemma", label: "SmartLabs Gemma 4 Canary" },
 ];
 
 export default function AIBuilder() {
@@ -26,7 +27,7 @@ export default function AIBuilder() {
   const [eventId, setEventId] = useState(params.get("event") || "");
   const [campaignId, setCampaignId] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [provider, setProvider] = useState("openai");
+  const [provider, setProvider] = useState("gemma");
   const [goal, setGoal] = useState("max_reach");
   const [selectedPlatforms, setSelectedPlatforms] = useState(["meta", "instagram", "youtube"]);
   const [audience, setAudience] = useState({ age_range: "25-40", gender: "all", geo: "Egypt", segment: "warm+cold" });

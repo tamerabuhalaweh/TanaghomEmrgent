@@ -42,6 +42,22 @@ class _FakeGeminiQuotaResponse:
         }
 
 
+class _FakeGemmaResponse:
+    status_code = 200
+    text = "ok"
+
+    def json(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '[{"platform":"instagram","format":"reel","hook":"Gemma Hook","caption":"Gemma Caption","cta":"Register","hashtags":["#event"],"reasoning":"Relevant"}]'
+                    }
+                }
+            ]
+        }
+
+
 def test_gemini_generation_uses_tenant_key_without_universal_key(monkeypatch):
     calls = []
 
@@ -76,6 +92,44 @@ def test_gemini_generation_uses_tenant_key_without_universal_key(monkeypatch):
     assert calls
     assert calls[0]["headers"]["x-goog-api-key"] == "tenant-gemini-key"
     assert "models/gemini-2.5-flash:generateContent" in calls[0]["url"]
+
+
+def test_gemma_generation_uses_openai_compatible_endpoint(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, json):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return _FakeGemmaResponse()
+
+    monkeypatch.setattr(llm_service, "UNIVERSAL_LLM_KEY", "")
+    monkeypatch.setattr(llm_service, "GEMMA_API_KEY", "server-gemma-key")
+    monkeypatch.setattr(llm_service, "GEMMA_BASE_URL", "https://api.thesmartlabs.net/gemma4/v1")
+    monkeypatch.setattr(llm_service.httpx, "AsyncClient", FakeAsyncClient)
+
+    ideas = asyncio.run(
+        llm_service.generate_post_ideas(
+            prompt="Sell a live course event",
+            provider="gemma",
+            model="gemma4-26b-a4b-canary",
+            platforms=["instagram"],
+        )
+    )
+
+    assert ideas[0]["hook"] == "Gemma Hook"
+    assert calls
+    assert calls[0]["url"] == "https://api.thesmartlabs.net/gemma4/v1/chat/completions"
+    assert calls[0]["headers"]["Authorization"] == "Bearer server-gemma-key"
+    assert calls[0]["json"]["model"] == "gemma4-26b-a4b-canary"
 
 
 def test_gemini_quota_error_is_actionable(monkeypatch):

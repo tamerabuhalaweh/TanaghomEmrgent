@@ -1,7 +1,8 @@
 """LLM helpers using the optional universal LLM adapter.
 
 Supported providers: openai (gpt-5.2, gpt-5.4), anthropic (claude-sonnet-4-6),
-gemini (gemini-3-flash-preview / gemini-3.1-pro-preview).
+gemini (gemini-3-flash-preview / gemini-3.1-pro-preview), gemma
+(OpenAI-compatible SmartLabs Gemma endpoint).
 """
 import os
 import json
@@ -24,11 +25,14 @@ load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
 UNIVERSAL_LLM_KEY = os.environ.get("UNIVERSAL_LLM_KEY") or os.environ.get("EMERGENT_LLM_KEY", "")
+GEMMA_API_KEY = os.environ.get("GEMMA_API_KEY", "")
+GEMMA_BASE_URL = os.environ.get("GEMMA_BASE_URL", "https://api.thesmartlabs.net/gemma4/v1").rstrip("/")
 
 PROVIDER_DEFAULTS = {
     "openai": "gpt-5.2",
     "anthropic": "claude-sonnet-4-6",
     "gemini": "gemini-2.5-flash",
+    "gemma": "gemma4-26b-a4b-canary",
 }
 
 
@@ -42,6 +46,13 @@ def _resolve_api_key(api_key: Optional[str] = None) -> str:
     resolved = api_key or UNIVERSAL_LLM_KEY
     if not resolved:
         raise RuntimeError("Tenant LLM key or UNIVERSAL_LLM_KEY is not configured")
+    return resolved
+
+
+def _resolve_gemma_api_key(api_key: Optional[str] = None) -> str:
+    resolved = api_key or GEMMA_API_KEY or UNIVERSAL_LLM_KEY
+    if not resolved:
+        raise RuntimeError("Tenant Gemma key, GEMMA_API_KEY, or UNIVERSAL_LLM_KEY is not configured")
     return resolved
 
 
@@ -142,6 +153,61 @@ async def _send_gemini_message(
     return text
 
 
+def _extract_chat_completion_text(payload: dict) -> str:
+    choices = payload.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    return str(message.get("content") or "").strip()
+
+
+async def _send_gemma_message(
+    *,
+    api_key: str,
+    model: str,
+    system_message: str,
+    user_prompt: str,
+) -> str:
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 900,
+        "top_p": 0.9,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f"{GEMMA_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        message = "Gemma API request failed"
+        status_code = 502
+        try:
+            body = response.json()
+            upstream_message = str((body.get("error") or {}).get("message") or body.get("message") or "").strip()
+        except Exception:
+            upstream_message = response.text[:300]
+        if response.status_code in (400, 401, 403):
+            message = (
+                "Gemma rejected the configured tenant key or model. "
+                "Check the provider, API key, model name, and SmartLabs permissions in AI Settings."
+            )
+            status_code = 400
+        elif upstream_message:
+            message = f"Gemma API request failed: {upstream_message[:180]}"
+        raise LLMProviderError(message, status_code=status_code)
+    text = _extract_chat_completion_text(response.json())
+    if not text:
+        raise RuntimeError("Gemma API returned no text content")
+    return text
+
+
 async def generate_post_ideas(
     prompt: str,
     provider: str = "openai",
@@ -198,9 +264,8 @@ Ensure each idea targets a specific platform from the list. Vary formats.
 Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
 """
 
-    resolved_key = _resolve_api_key(api_key)
-
     if provider == "gemini":
+        resolved_key = _resolve_api_key(api_key)
         resp = await _send_gemini_message(
             api_key=resolved_key,
             model=model,
@@ -212,6 +277,19 @@ Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
             parsed = [parsed]
         return parsed
 
+    if provider == "gemma":
+        resp = await _send_gemma_message(
+            api_key=_resolve_gemma_api_key(api_key),
+            model=model,
+            system_message=system_message,
+            user_prompt=user_prompt,
+        )
+        parsed = _extract_json(resp) or []
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        return parsed
+
+    resolved_key = _resolve_api_key(api_key)
     _ensure_llm_adapter_available(resolved_key)
 
     chat = LlmChat(
@@ -246,9 +324,8 @@ async def suggest_campaign_strategy(
         '"fomo_triggers": ["trigger1"]}'
     )
 
-    resolved_key = _resolve_api_key(api_key)
-
     if provider == "gemini":
+        resolved_key = _resolve_api_key(api_key)
         resp = await _send_gemini_message(
             api_key=resolved_key,
             model=model,
@@ -257,6 +334,16 @@ async def suggest_campaign_strategy(
         )
         return _extract_json(resp) or {}
 
+    if provider == "gemma":
+        resp = await _send_gemma_message(
+            api_key=_resolve_gemma_api_key(api_key),
+            model=model,
+            system_message=f"You are an elite campaign strategist. Output strict JSON only. {lang_instr}",
+            user_prompt=f"Build a marketing strategy for this brief. Return JSON schema:\n{schema}\n\nBrief:\n{prompt}",
+        )
+        return _extract_json(resp) or {}
+
+    resolved_key = _resolve_api_key(api_key)
     _ensure_llm_adapter_available(resolved_key)
 
     chat = LlmChat(

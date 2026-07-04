@@ -740,7 +740,7 @@ async def list_llm_keys(user: dict = Depends(require_role("admin"))):
 
 @api.post("/settings/llm-keys", response_model=LLMKeyOut)
 async def add_llm_key(body: LLMKeyIn, actor: dict = Depends(require_role("admin"))):
-    if body.provider not in ("openai", "anthropic", "gemini"):
+    if body.provider not in ("openai", "anthropic", "gemini", "gemma"):
         raise HTTPException(400, "Unsupported provider")
     doc = {
         "id": str(uuid.uuid4()),
@@ -786,6 +786,8 @@ async def get_llm_config_for_tenant(
     if requested_provider:
         requested_provider = requested_provider.lower()
         selected = next((doc for doc in docs if str(doc.get("provider", "")).lower() == requested_provider), None)
+        if not selected:
+            return None
     selected = selected or docs[0]
 
     api_key = decrypt(selected["api_key_enc"]) if selected.get("api_key_enc") else ""
