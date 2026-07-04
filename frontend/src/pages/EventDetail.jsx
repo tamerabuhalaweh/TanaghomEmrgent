@@ -8,7 +8,8 @@ import ChartFrame from "../components/ChartFrame";
 import EventKpiPanel from "../components/EventKpiPanel";
 import PlannerSection from "../components/PlannerSection";
 import {
-  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
+  Plus, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
+  FileText,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -41,6 +42,7 @@ export default function EventDetail() {
   const navigate = useNavigate();
   const [dash, setDash] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
+  const [posts, setPosts] = useState([]);
   const [leads, setLeads] = useState([]);
   const [openC, setOpenC] = useState(false);
   const [openL, setOpenL] = useState(false);
@@ -48,14 +50,16 @@ export default function EventDetail() {
   const [lForm, setLForm] = useState(LEAD_EMPTY(id));
 
   const load = useCallback(async () => {
-    const [d, c, l] = await Promise.all([
+    const [d, c, l, p] = await Promise.all([
       api.get(`/dashboard/event/${id}`),
       api.get(`/events/${id}/campaigns`),
       api.get(`/events/${id}/leads`),
+      api.get(`/posts?event_id=${id}`),
     ]);
     setDash(d.data);
     setCampaigns(c.data);
     setLeads(l.data);
+    setPosts(p.data || []);
   }, [id]);
 
   useEffect(() => {
@@ -111,6 +115,14 @@ export default function EventDetail() {
     name: p.platform,
     value: p.reach,
   }));
+
+  const postsByCampaign = posts.reduce((acc, post) => {
+    const key = post.campaign_id;
+    if (!key) return acc;
+    acc[key] = acc[key] || [];
+    acc[key].push(post);
+    return acc;
+  }, {});
 
   const funnelStages = [
     { key: "leads_new", label: t("totalLeads") },
@@ -366,6 +378,40 @@ export default function EventDetail() {
                   <div className="mt-3 flex items-center justify-between text-xs">
                     <div className="text-slate-500">{t("budgetPlanned")}</div>
                     <div className="font-bold text-slate-900">{currency(c.budget_planned)}</div>
+                  </div>
+                  <div className="mt-4 rounded-lg bg-slate-50 border border-slate-100 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-orange-500" />
+                        <div className="text-xs font-bold text-slate-900">
+                          Saved content
+                        </div>
+                      </div>
+                      <span className="badge-pill badge-blue">
+                        {(postsByCampaign[c.id] || []).length} post{(postsByCampaign[c.id] || []).length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {(postsByCampaign[c.id] || []).length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        {(postsByCampaign[c.id] || []).slice(0, 2).map((post) => (
+                          <div key={post.id} className="text-xs text-slate-700 border-t border-slate-200 pt-2">
+                            <div className="font-semibold text-slate-900 truncate">{post.hook || post.caption}</div>
+                            <div className="text-slate-500 mt-0.5">{post.platform} · {post.status}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-slate-500">
+                        No saved AI posts yet. Generate ideas, approve one, and it will appear here.
+                      </p>
+                    )}
+                    <Link
+                      to={`/content?event=${id}&campaign=${c.id}`}
+                      className="btn btn-outline w-full !py-2 mt-3 text-xs"
+                      data-testid={`campaign-view-content-${c.id}`}
+                    >
+                      View Campaign Content
+                    </Link>
                   </div>
                 </div>
               ))}

@@ -9,6 +9,9 @@ import Dashboard from "./pages/Dashboard";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import AIBuilder from "./pages/AIBuilder";
+import ContentLibrary from "./pages/ContentLibrary";
+import SocialMedia from "./pages/SocialMedia";
+import GhlWorkspace from "./pages/GhlWorkspace";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
 import Integrations from "./pages/Integrations";
@@ -43,6 +46,9 @@ function AppRoutes() {
           <Route path="/events" element={<Events />} />
           <Route path="/events/:id" element={<EventDetail />} />
           <Route path="/ai" element={<AIBuilder />} />
+          <Route path="/content" element={<ContentLibrary />} />
+          <Route path="/social-media" element={<SocialMedia />} />
+          <Route path="/ghl" element={<GhlWorkspace />} />
           <Route path="/integrations" element={<Integrations />} />
           <Route
             path="/users"

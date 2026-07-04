@@ -152,7 +152,7 @@ PERMISSIONS_BY_ROLE = {
     "social": ["events.read", "content.write", "dark_ads.write", "dashboard.read"],
     "viewer": ["events.read", "dashboard.read"],
 }
-VALID_INTEGRATION_KINDS = ("gohighlevel", "zapier", "webhook")
+VALID_INTEGRATION_KINDS = ("gohighlevel", "postiz", "zapier", "webhook")
 METRIC_SOURCES = ("none", "manual", "imported", "connector")
 
 # GHL vocabularies
@@ -379,6 +379,13 @@ class PostOut(BaseDoc):
     clicks: int = 0
     engagement: int = 0
     metric_source: str = "none"  # none | manual | imported | connector
+
+
+class PostListOut(PostOut):
+    campaign_name: Optional[str] = None
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None
 
 
 class PostUpdate(BaseModel):
@@ -849,7 +856,7 @@ async def delete_social(sid: str, actor: dict = Depends(require_role("admin"))):
 
 
 @api.get("/integrations", response_model=List[IntegrationOut])
-async def list_integrations(user: dict = Depends(require_role("admin"))):
+async def list_integrations(user: dict = Depends(require_role("admin", "marketing"))):
     docs = await db.integrations.find(_tq(user), {"_id": 0}).to_list(200)
     return [
         IntegrationOut(
@@ -866,7 +873,7 @@ async def list_integrations(user: dict = Depends(require_role("admin"))):
 
 
 @api.post("/integrations", response_model=IntegrationOut)
-async def add_integration(body: IntegrationIn, actor: dict = Depends(require_role("admin"))):
+async def add_integration(body: IntegrationIn, actor: dict = Depends(require_role("admin", "marketing"))):
     if body.kind not in VALID_INTEGRATION_KINDS:
         raise HTTPException(
             400, f"Unsupported integration kind. Allowed: {', '.join(VALID_INTEGRATION_KINDS)}"
@@ -898,7 +905,7 @@ async def add_integration(body: IntegrationIn, actor: dict = Depends(require_rol
 
 
 @api.delete("/integrations/{iid}")
-async def delete_integration(iid: str, actor: dict = Depends(require_role("admin"))):
+async def delete_integration(iid: str, actor: dict = Depends(require_role("admin", "marketing"))):
     r = await db.integrations.delete_one(_tq(actor, {"id": iid}))
     await audit(
         tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
@@ -1074,6 +1081,67 @@ async def list_posts(cid: str, user: dict = Depends(current_user)):
         _tq(user, {"campaign_id": cid}), {"_id": 0}
     ).sort("created_at", -1).to_list(500)
     return [PostOut(**d) for d in docs]
+
+
+@api.get("/posts", response_model=List[PostListOut])
+async def list_all_posts(
+    event_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    status: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    query = _tq(user)
+    if campaign_id:
+        query["campaign_id"] = campaign_id
+    if platform:
+        query["platform"] = platform
+    if status:
+        query["status"] = status
+
+    campaigns_by_id: dict = {}
+    if event_id:
+        event_campaigns = await db.campaigns.find(
+            _tq(user, {"event_id": event_id}), {"_id": 0}
+        ).to_list(1000)
+        campaign_ids = [c["id"] for c in event_campaigns]
+        if not campaign_ids:
+            return []
+        campaigns_by_id = {c["id"]: c for c in event_campaigns}
+        query["campaign_id"] = {"$in": campaign_ids}
+
+    docs = await db.posts.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    if not docs:
+        return []
+
+    missing_campaign_ids = {
+        d.get("campaign_id") for d in docs
+        if d.get("campaign_id") and d.get("campaign_id") not in campaigns_by_id
+    }
+    if missing_campaign_ids:
+        campaigns = await db.campaigns.find(
+            _tq(user, {"id": {"$in": list(missing_campaign_ids)}}), {"_id": 0}
+        ).to_list(1000)
+        campaigns_by_id.update({c["id"]: c for c in campaigns})
+
+    event_ids = {c.get("event_id") for c in campaigns_by_id.values() if c.get("event_id")}
+    events_by_id = {}
+    if event_ids:
+        events = await db.events.find(_tq(user, {"id": {"$in": list(event_ids)}}), {"_id": 0}).to_list(1000)
+        events_by_id = {e["id"]: e for e in events}
+
+    enriched = []
+    for doc in docs:
+        campaign = campaigns_by_id.get(doc.get("campaign_id")) or {}
+        event = events_by_id.get(campaign.get("event_id")) or {}
+        enriched.append(PostListOut(
+            **doc,
+            campaign_name=campaign.get("name"),
+            event_id=campaign.get("event_id"),
+            event_name=event.get("name"),
+            event_date=event.get("start_date"),
+        ))
+    return enriched
 
 
 @api.post("/posts", response_model=PostOut)
