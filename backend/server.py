@@ -2041,6 +2041,9 @@ async def dashboard_global(user: dict = Depends(current_user)):
         "trend": kpi["trend"],
         "channel_breakdown": kpi["channel_breakdown"],
         "source_type_breakdown": kpi["source_breakdown"],
+        "leads_by_source": lm["leads_by_source"],
+        "leads_by_temperature": lm["leads_by_temperature"],
+        "ghl_mirrored_leads_count": lm["leads_by_source"].get("gohighlevel", 0),
         **_status_block(kpi["records_count"]),
     }
 
