@@ -1,0 +1,187 @@
+{
+  "theme": "Light",
+  "archetype": "Swiss & High-Contrast",
+  "domain": "Enterprise SaaS & Marketing Campaign Dashboard",
+  "overall_vibe": "Authoritative, pristine, AI-native, highly productive, and visually sharp. Follows 2026 SaaS design patterns: modular bento-box layouts, progressive disclosure, and integrated AI capabilities.",
+  "colors": {
+    "background": "#FFFFFF",
+    "foreground": "#0A0A0A",
+    "surface": "#F8FAFC",
+    "border": "#E2E8F0",
+    "primary": "#2563EB",
+    "primary_hover": "#1D4ED8",
+    "accent_ai": "#F97316",
+    "destructive": "#DC2626",
+    "success": "#16A34A",
+    "muted": "#64748B",
+    "rules": [
+      "Use stark white backgrounds for core reading/content areas to maintain the 'Swiss & High-Contrast' authority.",
+      "Use a 10% grey tint (e.g., #F8FAFC) for app background outside cards, allowing crisp white cards to stand out.",
+      "Primary brand color is Electric Blue; reserve Accent Orange (#F97316) exclusively for AI-generated actions (e.g., 'Generate AI Post', 'AI Suggestion').",
+      "Do NOT use pure #000000. Use #0A0A0A (Obsidian) for ultimate text readability."
+    ]
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk or Satoshi (English), Cairo (Arabic)",
+    "body_font": "Satoshi or Inter (English), Cairo (Arabic)",
+    "mono_font": "JetBrains Mono (for API keys, technical tags, algorithms)",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl font-bold tracking-tight leading-tight",
+      "h2": "text-2xl sm:text-3xl font-semibold tracking-tight",
+      "h3": "text-xl font-semibold",
+      "body": "text-base leading-relaxed text-foreground",
+      "small_label": "text-xs font-semibold uppercase tracking-[0.15em] text-muted",
+      "kpi_value": "text-4xl sm:text-5xl font-black tracking-tighter text-foreground"
+    },
+    "rules": [
+      "Headings MUST use tight tracking (tracking-tight or tracking-tighter).",
+      "Metrics and KPIs MUST use heavy weights (font-black or font-extrabold).",
+      "Labels over inputs and charts must be uppercase with wide spacing (tracking-[0.15em]).",
+      "Ensure proper fallback for Arabic fonts to maintain readability in RTL."
+    ]
+  },
+  "spacing_and_layout": {
+    "philosophy": "Dense & Modular. Rely on the 'Control Room' bento grid pattern for dashboards to ensure high data scanability. Avoid sprawling empty spaces on analytical views.",
+    "container_padding": "p-6 md:p-8",
+    "grid_gap": "gap-4 md:gap-6",
+    "patterns": {
+      "dashboard_bento": "grid grid-cols-1 md:grid-cols-4 lg:grid-cols-12 gap-4 md:gap-6",
+      "kpi_widget": "col-span-1 md:col-span-2 lg:col-span-3",
+      "main_chart": "col-span-1 md:col-span-4 lg:col-span-8 row-span-2",
+      "side_feed": "col-span-1 md:col-span-2 lg:col-span-4 row-span-2"
+    },
+    "rules": [
+      "Grid items MUST be direct children of the grid container.",
+      "Cards should have a flat background (bg-white), a crisp 1px border (border border-slate-200), and NO shadow by default. Add a subtle shadow on hover.",
+      "Sidebar should be vertical on the start (left for LTR, right for RTL) and collapsible for max horizontal screen space."
+    ]
+  },
+  "rtl_guidelines": {
+    "strategy": "Native Bi-directional Support via Flexbox/Grid and CSS Logical Properties.",
+    "implementation": [
+      "DO NOT use absolute directional classes like 'ml-4', 'pr-2', 'pl-4'.",
+      "MUST use logical spacing classes: 'ms-4' (margin-start), 'me-4' (margin-end), 'ps-4' (padding-start), 'pe-4' (padding-end).",
+      "Flex directions handle RTL natively. Use 'justify-start', 'justify-end' instead of 'justify-left', 'justify-right'.",
+      "Border radii logic: 'rounded-s-md', 'rounded-e-md', 'border-s-2'.",
+      "Toggle direction globally by setting <html dir='rtl' lang='ar'>."
+    ]
+  },
+  "components": {
+    "cards": {
+      "style": "bg-white border border-slate-200 rounded-lg p-6 overflow-hidden",
+      "interaction": "transition-all duration-200 hover:border-slate-300 hover:shadow-sm"
+    },
+    "buttons": {
+      "primary": "bg-blue-600 text-white hover:bg-blue-700 font-medium rounded-md px-4 py-2 transition-colors",
+      "ai_action": "bg-orange-500 text-white hover:bg-orange-600 font-semibold rounded-md px-4 py-2 shadow-[0_0_15px_rgba(249,115,22,0.3)] transition-all flex items-center gap-2",
+      "secondary": "bg-slate-100 text-slate-900 hover:bg-slate-200 border border-transparent font-medium rounded-md px-4 py-2 transition-colors",
+      "outline": "bg-transparent text-slate-900 hover:bg-slate-50 border border-slate-300 font-medium rounded-md px-4 py-2 transition-colors"
+    },
+    "inputs": {
+      "style": "bg-white border border-slate-300 text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 rounded-md px-3 py-2",
+      "labels": "text-sm font-semibold text-slate-700 mb-1.5 block"
+    },
+    "badges": {
+      "style": "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold",
+      "warm_lead": "bg-orange-100 text-orange-800",
+      "cold_lead": "bg-slate-100 text-slate-800",
+      "purchased": "bg-green-100 text-green-800",
+      "social_meta": "bg-blue-50 text-blue-700 border border-blue-200"
+    },
+    "icons": {
+      "library": "lucide-react",
+      "style": "Use 20px (w-5 h-5) for standard icons, 16px (w-4 h-4) for dense list icons. Stroke width 2."
+    },
+    "third_party": {
+      "charts": "recharts (Line charts for trends, Donut for multi-platform distribution)",
+      "date_picker": "Shadcn Calendar / DatePicker component",
+      "tables": "Shadcn Table component"
+    }
+  },
+  "image_urls": {
+    "event_motaz": {
+      "url": "https://images.unsplash.com/photo-1762968274962-20c12e6e8ecd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxidXNpbmVzcyUyMGNvbmZlcmVuY2UlMjBzdGFnZXxlbnwwfHx8fDE3ODMxNTI3MTB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Motaz 2-day live on stage background / header image."
+    },
+    "event_excellence": {
+      "url": "https://images.unsplash.com/photo-1781029711351-e915512bf69c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHw0fHxidXNpbmVzcyUyMGNvbmZlcmVuY2UlMjBzdGFnZXxlbnwwfHx8fDE3ODMxNTI3MTB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Excellence Camp / Business Camp event background image."
+    },
+    "avatar_amro": {
+      "url": "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODMxNTI3MTB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar for Amro (Marketing/Sales Manager)."
+    },
+    "avatar_user_1": {
+      "url": "https://images.pexels.com/photos/27086922/pexels-photo-27086922.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Team member / lead avatar."
+    },
+    "avatar_user_2": {
+      "url": "https://images.pexels.com/photos/11655430/pexels-photo-11655430.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Team member / lead avatar."
+    }
+  },
+  "pages": [
+    {
+      "name": "Global Admin Dashboard",
+      "layout": "Sidebar navigation (LTR/RTL responsive). Top nav with Bilingual (EN/AR) toggle switch.",
+      "features": [
+        "KPI Widgets (row 1): Total Leads, Total Revenue, Global Engagement, Meetings Booked.",
+        "Events List Overview: Cards for 'Motaz Live', 'Excellence Camp', 'Business Camp', 'Virtual Ramadan'.",
+        "Recent AI Posts Activity Feed: Showing approvals/rejections."
+      ]
+    },
+    {
+      "name": "Event Sub-Dashboard (e.g., Motaz 2-day live)",
+      "layout": "Bento Grid Dashboard.",
+      "features": [
+        "Hero section showing the event_motaz image with a transparent-to-black gradient overlay (bg-gradient-to-t from-black/60 to-transparent) + Event Title & Dates.",
+        "Metrics (KPI): New Leads, Leads Filled Form, Meetings Booked, Purchases, No-Shows.",
+        "Budget Tracker Widget: Planned vs Actual Budget (Bar chart) + Real-time ROI.",
+        "Audience Segmentation Widget: Warm/Cold Leads, Follower/Non-follower split.",
+        "Campaign Timeline view."
+      ]
+    },
+    {
+      "name": "AI Content & Campaign Builder",
+      "layout": "Two-pane layout. Left pane: Prompt/Inputs. Right pane: Visual Preview (2026 UI Pattern).",
+      "features": [
+        "Left Pane: Target Audience selectors (Age, Gender, Geo), Algorithm MCP goals (Max Reach vs Conversion), Prompt textarea.",
+        "Right Pane: AI Output stream. Suggests posts with specific formatting (Video script vs Text).",
+        "Approval Flow: Each AI generated block has 'Approve', 'Edit', 'Reject' buttons.",
+        "Platform selectors: Meta, YouTube Ads, WhatsApp, Email FOMO templates."
+      ]
+    },
+    {
+      "name": "Admin Settings & Integrations",
+      "layout": "Settings Layout with vertical tabs (Profile, Users, AI Keys, Social Accounts, CRM Integrations).",
+      "features": [
+        "User Management: Add users, assign permissions.",
+        "LLM API Keys Config: Secure input fields for Google Gemini, ChatGPT, Claude.",
+        "Social Accounts Config: OAuth connection blocks for Meta/YouTube/TikTok.",
+        "GoHighLevel CRM Integration: Webhook & API key setup, tag mapping (e.g., mapping 'Purchased' tags to CRM workflows)."
+      ]
+    }
+  ],
+  "data_testid_guidelines": {
+    "rule": "Every interactive and key informational element MUST have a unique data-testid.",
+    "convention": "kebab-case, role-based",
+    "examples": [
+      "data-testid='language-toggle-btn'",
+      "data-testid='ai-post-generate-btn'",
+      "data-testid='campaign-approve-action'",
+      "data-testid='event-card-motaz-live'",
+      "data-testid='kpi-total-revenue'",
+      "data-testid='llm-key-input-chatgpt'",
+      "data-testid='crm-connect-gohighlevel'"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the color palette. No arbitrary colors.",
+    "Ensure RTL is implemented using CSS logical properties. Do NOT hardcode left/right margins/paddings unless explicitly required.",
+    "Use standard HTML+Tailwind for main layouts, and rely on Shadcn components for complex interactions like Modals, Tables, Forms, Selects.",
+    "Build the dashboard pages using the Bento grid rules provided.",
+    "Inject the media URLs provided in 'image_urls' exactly as provided. Do not use generic placeholders like via.placeholder.com.",
+    "Ensure the language toggle actually wraps the app or triggers <html dir='rtl'> for Arabic and <html dir='ltr'> for English.",
+    "Prioritize Recharts for all analytical data displays."
+  ]
+}
