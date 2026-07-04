@@ -4,13 +4,15 @@ import { PageHeader, KpiCard, SectionTitle, currency, nfmt } from "../components
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import Modal from "../components/Modal";
+import ChartFrame from "../components/ChartFrame";
 import EventKpiPanel from "../components/EventKpiPanel";
 import PlannerSection from "../components/PlannerSection";
 import {
-  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
+  Plus, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
+  FileText,
 } from "lucide-react";
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
 import { toast } from "sonner";
@@ -40,6 +42,7 @@ export default function EventDetail() {
   const navigate = useNavigate();
   const [dash, setDash] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
+  const [posts, setPosts] = useState([]);
   const [leads, setLeads] = useState([]);
   const [openC, setOpenC] = useState(false);
   const [openL, setOpenL] = useState(false);
@@ -47,14 +50,16 @@ export default function EventDetail() {
   const [lForm, setLForm] = useState(LEAD_EMPTY(id));
 
   const load = useCallback(async () => {
-    const [d, c, l] = await Promise.all([
+    const [d, c, l, p] = await Promise.all([
       api.get(`/dashboard/event/${id}`),
       api.get(`/events/${id}/campaigns`),
       api.get(`/events/${id}/leads`),
+      api.get(`/posts?event_id=${id}`),
     ]);
     setDash(d.data);
     setCampaigns(c.data);
     setLeads(l.data);
+    setPosts(p.data || []);
   }, [id]);
 
   useEffect(() => {
@@ -110,6 +115,14 @@ export default function EventDetail() {
     name: p.platform,
     value: p.reach,
   }));
+
+  const postsByCampaign = posts.reduce((acc, post) => {
+    const key = post.campaign_id;
+    if (!key) return acc;
+    acc[key] = acc[key] || [];
+    acc[key].push(post);
+    return acc;
+  }, {});
 
   const funnelStages = [
     { key: "leads_new", label: t("totalLeads") },
@@ -245,22 +258,20 @@ export default function EventDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
           <div className="lg:col-span-7 card-flat p-5">
             <SectionTitle>{t("plannedVsActual")}</SectionTitle>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={budgetData}>
-                  <CartesianGrid stroke="#E2E8F0" vertical={false} />
-                  <XAxis dataKey="label" />
-                  <YAxis />
-                  <Tooltip
-                    contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
-                  />
-                  <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                    <Cell fill="#0F172A" />
-                    <Cell fill="#F97316" />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ChartFrame className="h-64">
+              <BarChart data={budgetData}>
+                <CartesianGrid stroke="#E2E8F0" vertical={false} />
+                <XAxis dataKey="label" />
+                <YAxis />
+                <Tooltip
+                  contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
+                />
+                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                  <Cell fill="#0F172A" />
+                  <Cell fill="#F97316" />
+                </Bar>
+              </BarChart>
+            </ChartFrame>
           </div>
 
           <div className="lg:col-span-5 card-flat p-5">
@@ -270,28 +281,26 @@ export default function EventDetail() {
                 {t("noData")}
               </div>
             ) : (
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={platformData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={50}
-                      outerRadius={90}
-                      paddingAngle={2}
-                    >
-                      {platformData.map((_, i) => (
-                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
-                    />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+              <ChartFrame className="h-64">
+                <PieChart>
+                  <Pie
+                    data={platformData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={90}
+                    paddingAngle={2}
+                  >
+                    {platformData.map((_, i) => (
+                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ background: "white", border: "1px solid #E2E8F0", borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Legend />
+                </PieChart>
+              </ChartFrame>
             )}
           </div>
         </div>
@@ -369,6 +378,40 @@ export default function EventDetail() {
                   <div className="mt-3 flex items-center justify-between text-xs">
                     <div className="text-slate-500">{t("budgetPlanned")}</div>
                     <div className="font-bold text-slate-900">{currency(c.budget_planned)}</div>
+                  </div>
+                  <div className="mt-4 rounded-lg bg-slate-50 border border-slate-100 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-orange-500" />
+                        <div className="text-xs font-bold text-slate-900">
+                          Saved content
+                        </div>
+                      </div>
+                      <span className="badge-pill badge-blue">
+                        {(postsByCampaign[c.id] || []).length} post{(postsByCampaign[c.id] || []).length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {(postsByCampaign[c.id] || []).length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        {(postsByCampaign[c.id] || []).slice(0, 2).map((post) => (
+                          <div key={post.id} className="text-xs text-slate-700 border-t border-slate-200 pt-2">
+                            <div className="font-semibold text-slate-900 truncate">{post.hook || post.caption}</div>
+                            <div className="text-slate-500 mt-0.5">{post.platform} · {post.status}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-slate-500">
+                        No saved AI posts yet. Generate ideas, approve one, and it will appear here.
+                      </p>
+                    )}
+                    <Link
+                      to={`/content?event=${id}&campaign=${c.id}`}
+                      className="btn btn-outline w-full !py-2 mt-3 text-xs"
+                      data-testid={`campaign-view-content-${c.id}`}
+                    >
+                      View Campaign Content
+                    </Link>
                   </div>
                 </div>
               ))}

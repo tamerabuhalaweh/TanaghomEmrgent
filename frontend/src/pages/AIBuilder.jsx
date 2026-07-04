@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader, SectionTitle } from "../components/ui-bits";
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
-import { Sparkles, Check, X, Save, Wand2 } from "lucide-react";
+import { Sparkles, Check, X, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 
 const PLATFORMS = ["meta", "instagram", "youtube", "tiktok", "whatsapp", "email"];
@@ -16,6 +16,7 @@ const PROVIDERS = [
   { v: "openai", label: "OpenAI · GPT-5.2" },
   { v: "anthropic", label: "Anthropic · Claude Sonnet 4.6" },
   { v: "gemini", label: "Google · Gemini 3 Flash" },
+  { v: "gemma", label: "SmartLabs Gemma 4 Canary" },
 ];
 
 export default function AIBuilder() {
@@ -26,13 +27,14 @@ export default function AIBuilder() {
   const [eventId, setEventId] = useState(params.get("event") || "");
   const [campaignId, setCampaignId] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [provider, setProvider] = useState("openai");
+  const [provider, setProvider] = useState("gemma");
   const [goal, setGoal] = useState("max_reach");
   const [selectedPlatforms, setSelectedPlatforms] = useState(["meta", "instagram", "youtube"]);
   const [audience, setAudience] = useState({ age_range: "25-40", gender: "all", geo: "Egypt", segment: "warm+cold" });
   const [n, setN] = useState(4);
   const [loading, setLoading] = useState(false);
   const [ideas, setIdeas] = useState([]);
+  const [lastSaved, setLastSaved] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -90,7 +92,8 @@ export default function AIBuilder() {
         status: "approved",
       });
       setIdeas((arr) => arr.map((x) => x._idx === idea._idx ? { ...x, _status: "approved" } : x));
-      toast.success("Approved & saved");
+      setLastSaved({ eventId, campaignId });
+      toast.success("Approved and saved to Content Library");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Error");
     }
@@ -248,6 +251,36 @@ export default function AIBuilder() {
 
         {/* Right: output */}
         <div className="lg:col-span-7 space-y-4">
+          {lastSaved && (
+            <div className="card-flat p-5 border-green-200 bg-green-50/60" data-testid="ai-saved-next-actions">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                  <div className="text-sm font-black text-green-950">Saved to Campaign Content</div>
+                  <p className="text-xs text-green-900 mt-1">
+                    The approved idea is now available as a saved post. You can edit it,
+                    approve it for scheduling, or prepare it for Postiz from the social workspace.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    to={`/content?event=${lastSaved.eventId}&campaign=${lastSaved.campaignId}`}
+                    className="btn btn-primary !py-2"
+                    data-testid="ai-view-saved-content"
+                  >
+                    View Campaign Content
+                  </Link>
+                  <Link
+                    to="/social-media"
+                    className="btn btn-outline !py-2"
+                    data-testid="ai-open-social-media"
+                  >
+                    Open Social Media
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+
           {ideas.length === 0 && !loading && (
             <div className="card-flat p-10 text-center" data-testid="ai-empty">
               <div className="w-14 h-14 rounded-full bg-orange-100 grid place-items-center mx-auto text-orange-600">

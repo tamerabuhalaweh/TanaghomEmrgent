@@ -152,7 +152,7 @@ PERMISSIONS_BY_ROLE = {
     "social": ["events.read", "content.write", "dark_ads.write", "dashboard.read"],
     "viewer": ["events.read", "dashboard.read"],
 }
-VALID_INTEGRATION_KINDS = ("gohighlevel", "zapier", "webhook")
+VALID_INTEGRATION_KINDS = ("gohighlevel", "postiz", "zapier", "webhook")
 METRIC_SOURCES = ("none", "manual", "imported", "connector")
 
 # GHL vocabularies
@@ -379,6 +379,13 @@ class PostOut(BaseDoc):
     clicks: int = 0
     engagement: int = 0
     metric_source: str = "none"  # none | manual | imported | connector
+
+
+class PostListOut(PostOut):
+    campaign_name: Optional[str] = None
+    event_id: Optional[str] = None
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None
 
 
 class PostUpdate(BaseModel):
@@ -740,7 +747,7 @@ async def list_llm_keys(user: dict = Depends(require_role("admin"))):
 
 @api.post("/settings/llm-keys", response_model=LLMKeyOut)
 async def add_llm_key(body: LLMKeyIn, actor: dict = Depends(require_role("admin"))):
-    if body.provider not in ("openai", "anthropic", "gemini"):
+    if body.provider not in ("openai", "anthropic", "gemini", "gemma"):
         raise HTTPException(400, "Unsupported provider")
     doc = {
         "id": str(uuid.uuid4()),
@@ -771,6 +778,35 @@ async def delete_llm_key(key_id: str, actor: dict = Depends(require_role("admin"
         result="success" if r.deleted_count else "failure",
     )
     return {"deleted": r.deleted_count}
+
+
+async def get_llm_config_for_tenant(
+    tenant_id: str,
+    requested_provider: Optional[str] = None,
+) -> Optional[dict]:
+    """Return a tenant-owned LLM key, preferring the requested provider."""
+    docs = await db.llm_keys.find({"tenant_id": tenant_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    if not docs:
+        return None
+
+    selected = None
+    if requested_provider:
+        requested_provider = requested_provider.lower()
+        selected = next((doc for doc in docs if str(doc.get("provider", "")).lower() == requested_provider), None)
+        if not selected:
+            return None
+    selected = selected or docs[0]
+
+    api_key = decrypt(selected["api_key_enc"]) if selected.get("api_key_enc") else ""
+    if not api_key:
+        return None
+
+    return {
+        "provider": selected.get("provider"),
+        "model": selected.get("model"),
+        "api_key": api_key,
+        "key_id": selected.get("id"),
+    }
 
 
 @api.get("/settings/social-accounts", response_model=List[SocialAccountOut])
@@ -820,7 +856,7 @@ async def delete_social(sid: str, actor: dict = Depends(require_role("admin"))):
 
 
 @api.get("/integrations", response_model=List[IntegrationOut])
-async def list_integrations(user: dict = Depends(require_role("admin"))):
+async def list_integrations(user: dict = Depends(require_role("admin", "marketing"))):
     docs = await db.integrations.find(_tq(user), {"_id": 0}).to_list(200)
     return [
         IntegrationOut(
@@ -837,7 +873,7 @@ async def list_integrations(user: dict = Depends(require_role("admin"))):
 
 
 @api.post("/integrations", response_model=IntegrationOut)
-async def add_integration(body: IntegrationIn, actor: dict = Depends(require_role("admin"))):
+async def add_integration(body: IntegrationIn, actor: dict = Depends(require_role("admin", "marketing"))):
     if body.kind not in VALID_INTEGRATION_KINDS:
         raise HTTPException(
             400, f"Unsupported integration kind. Allowed: {', '.join(VALID_INTEGRATION_KINDS)}"
@@ -869,7 +905,7 @@ async def add_integration(body: IntegrationIn, actor: dict = Depends(require_rol
 
 
 @api.delete("/integrations/{iid}")
-async def delete_integration(iid: str, actor: dict = Depends(require_role("admin"))):
+async def delete_integration(iid: str, actor: dict = Depends(require_role("admin", "marketing"))):
     r = await db.integrations.delete_one(_tq(actor, {"id": iid}))
     await audit(
         tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
@@ -998,25 +1034,41 @@ async def delete_campaign(cid: str, actor: dict = Depends(require_role("admin", 
 @api.post("/posts/generate")
 async def ai_generate_posts(body: PostGenerateIn, actor: dict = Depends(require_role("admin", "marketing"))):
     try:
+        llm_config = await get_llm_config_for_tenant(actor["tenant_id"], body.provider)
+        provider = body.provider
+        model = body.model
+        api_key = None
+        key_source = "universal"
+        if llm_config:
+            provider = llm_config.get("provider") or provider
+            model = model or llm_config.get("model")
+            api_key = llm_config.get("api_key")
+            key_source = "tenant"
+
         ideas = await llm_service.generate_post_ideas(
-            prompt=body.prompt, provider=body.provider, model=body.model,
+            prompt=body.prompt, provider=provider, model=model, api_key=api_key,
             platforms=body.platforms, audience=body.audience, goal=body.goal,
             n=max(1, min(body.n, 8)), language=body.language,
         )
     except Exception as e:
-        log.exception("AI generation failed")
+        status_code = getattr(e, "status_code", 500)
+        safe_error = str(e)
+        if isinstance(e, llm_service.LLMProviderError):
+            log.warning("AI provider rejected generation request: %s", safe_error)
+        else:
+            log.exception("AI generation failed")
         await audit(
             tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
             action="post.generated", object_type="post",
             result="failure",
-            metadata={"provider": body.provider, "error": str(e)[:200]},
+            metadata={"provider": body.provider, "error": safe_error[:200]},
         )
-        raise HTTPException(500, f"AI generation failed: {e}")
+        raise HTTPException(status_code, f"AI generation failed: {safe_error}")
     await audit(
         tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
         action="post.generated", object_type="post",
         metadata={
-            "provider": body.provider, "n": len(ideas or []),
+            "provider": provider, "n": len(ideas or []), "key_source": key_source,
             "platforms": body.platforms, "campaign_id": body.campaign_id,
         },
     )
@@ -1029,6 +1081,67 @@ async def list_posts(cid: str, user: dict = Depends(current_user)):
         _tq(user, {"campaign_id": cid}), {"_id": 0}
     ).sort("created_at", -1).to_list(500)
     return [PostOut(**d) for d in docs]
+
+
+@api.get("/posts", response_model=List[PostListOut])
+async def list_all_posts(
+    event_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    platform: Optional[str] = None,
+    status: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    query = _tq(user)
+    if campaign_id:
+        query["campaign_id"] = campaign_id
+    if platform:
+        query["platform"] = platform
+    if status:
+        query["status"] = status
+
+    campaigns_by_id: dict = {}
+    if event_id:
+        event_campaigns = await db.campaigns.find(
+            _tq(user, {"event_id": event_id}), {"_id": 0}
+        ).to_list(1000)
+        campaign_ids = [c["id"] for c in event_campaigns]
+        if not campaign_ids:
+            return []
+        campaigns_by_id = {c["id"]: c for c in event_campaigns}
+        query["campaign_id"] = {"$in": campaign_ids}
+
+    docs = await db.posts.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    if not docs:
+        return []
+
+    missing_campaign_ids = {
+        d.get("campaign_id") for d in docs
+        if d.get("campaign_id") and d.get("campaign_id") not in campaigns_by_id
+    }
+    if missing_campaign_ids:
+        campaigns = await db.campaigns.find(
+            _tq(user, {"id": {"$in": list(missing_campaign_ids)}}), {"_id": 0}
+        ).to_list(1000)
+        campaigns_by_id.update({c["id"]: c for c in campaigns})
+
+    event_ids = {c.get("event_id") for c in campaigns_by_id.values() if c.get("event_id")}
+    events_by_id = {}
+    if event_ids:
+        events = await db.events.find(_tq(user, {"id": {"$in": list(event_ids)}}), {"_id": 0}).to_list(1000)
+        events_by_id = {e["id"]: e for e in events}
+
+    enriched = []
+    for doc in docs:
+        campaign = campaigns_by_id.get(doc.get("campaign_id")) or {}
+        event = events_by_id.get(campaign.get("event_id")) or {}
+        enriched.append(PostListOut(
+            **doc,
+            campaign_name=campaign.get("name"),
+            event_id=campaign.get("event_id"),
+            event_name=event.get("name"),
+            event_date=event.get("start_date"),
+        ))
+    return enriched
 
 
 @api.post("/posts", response_model=PostOut)

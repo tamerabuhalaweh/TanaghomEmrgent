@@ -3,13 +3,15 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Calendar,
-  Megaphone,
+  FileText,
   Sparkles,
   Users,
   Settings,
   Plug,
   LogOut,
   Languages,
+  Share2,
+  Building2,
 } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { useAuth } from "../lib/auth";
@@ -18,6 +20,9 @@ const NAV = [
   { to: "/", key: "dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/events", key: "events", icon: Calendar, testid: "nav-events" },
   { to: "/ai", key: "aiBuilder", icon: Sparkles, testid: "nav-ai" },
+  { to: "/content", key: "contentLibrary", icon: FileText, testid: "nav-content" },
+  { to: "/social-media", key: "socialMedia", icon: Share2, testid: "nav-social-media" },
+  { to: "/ghl", key: "goHighLevel", icon: Building2, testid: "nav-ghl" },
   { to: "/integrations", key: "integrations", icon: Plug, testid: "nav-integrations" },
   { to: "/users", key: "users", icon: Users, testid: "nav-users", adminOnly: true },
   { to: "/settings", key: "settings", icon: Settings, testid: "nav-settings", adminOnly: true },

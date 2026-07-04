@@ -10,6 +10,7 @@ const LLM_PROVIDERS = [
   { v: "openai", label: "OpenAI (GPT-5.x)" },
   { v: "anthropic", label: "Anthropic (Claude)" },
   { v: "gemini", label: "Google (Gemini)" },
+  { v: "gemma", label: "SmartLabs Gemma 4 Canary" },
 ];
 const SOCIAL_PLATFORMS = ["meta", "instagram", "youtube", "tiktok", "linkedin", "x"];
 
@@ -20,7 +21,7 @@ export default function Settings() {
   const [accounts, setAccounts] = useState([]);
   const [openKey, setOpenKey] = useState(false);
   const [openSocial, setOpenSocial] = useState(false);
-  const [kForm, setKForm] = useState({ provider: "openai", api_key: "", model: "", label: "" });
+  const [kForm, setKForm] = useState({ provider: "gemma", api_key: "", model: "gemma4-26b-a4b-canary", label: "" });
   const [sForm, setSForm] = useState({ platform: "meta", handle: "", access_token: "", page_id: "" });
 
   const load = async () => {
@@ -38,7 +39,7 @@ export default function Settings() {
       await api.post("/settings/llm-keys", kForm);
       toast.success(t("createdSuccess"));
       setOpenKey(false);
-      setKForm({ provider: "openai", api_key: "", model: "", label: "" });
+      setKForm({ provider: "gemma", api_key: "", model: "gemma4-26b-a4b-canary", label: "" });
       load();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Error");
@@ -100,7 +101,7 @@ export default function Settings() {
             <div className="card-flat p-5">
               <div className="badge-pill badge-orange">Default</div>
               <div className="mt-2 text-lg font-bold text-slate-900">AI Provider Key</div>
-              <div className="text-xs text-slate-500 mt-1">Works with OpenAI, Anthropic, Gemini.</div>
+              <div className="text-xs text-slate-500 mt-1">Works with OpenAI, Anthropic, Gemini, and SmartLabs Gemma.</div>
             </div>
             {keys.map((k) => (
               <div key={k.id} className="card-flat p-5" data-testid={`llm-key-${k.id}`}>
