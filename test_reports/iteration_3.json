@@ -1,0 +1,38 @@
+{
+  "summary": "Patch 2 (Event KPI records + verified dashboard aggregation) backend tests — 66/66 passing (43 pre-existing + 23 new). Found and fixed one real backend bug in POST /events/{event_id}/kpis/csv/import (TypeError: multiple values for keyword 'source_type' — the prepared row dict already carried source_type='csv_import' and was then double-set in KpiRecordOut(...)). Coverage: KPI CRUD & RBAC (admin/marketing create, sales/viewer forbidden, delete admin-only, GET open to all authenticated), validation (negative rejection, unknown channel, unknown source_type filter, all-zero rule with/without notes), tenant isolation (Tenant B seeded via direct Mongo — Tenant A cannot GET/PATCH/DELETE B's KPI, cannot reference B's campaign_id → 400, global dashboard tenant-scoped), CSV dry-run (mixed rows: valid counted, invalid row_errors with row_index+error, DB unchanged, audit metadata only has counts/event_id — no raw rows), CSV import (atomic reject on any invalid row with failure audit, happy path inserts with source_type='csv_import'/source_name='csv upload'), dashboards (no_verified_metrics status when no records, verified totals for all 12 KPI fields, derived rates form_completion_rate/lead_to_purchase_rate/meeting_show_rate/cost_per_lead/cost_per_purchase, divide-by-zero → 0, channel_breakdown + source_type_breakdown, roi_percent), audit sanitization (notes containing 'api_key=super-secret-xyz-123' redacted to '[redacted-notes]' — raw secret absent from audit-logs).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_kpi.py",
+    "/app/test_reports/pytest/full_results.xml"
+  ],
+  "action_items": [
+    "Verify the csv_import fix in server.py (line 1354 area) — `d.pop('source_type', None)` before spreading into KpiRecordOut(...). This was blocking the happy path of POST /api/events/{event_id}/kpis/csv/import (500 TypeError).",
+    "server.py is now ~1670 lines — split into routers (kpi_router, dashboard_router, auth, users, events, campaigns, posts, leads, settings, integrations, audit) for maintainability.",
+    "@app.on_event('startup') is deprecated — migrate to FastAPI lifespan."
+  ],
+  "critical_code_review_comments": [
+    "BUG FIXED IN THIS RUN: server.py `csv_import` route was passing `source_type` twice to KpiRecordOut (once via `**d` from prepared row, once as explicit kwarg) → 500 TypeError. Applied minimal fix (`d.pop('source_type', None)` before spread). Consider a cleaner refactor: build a plain dict then construct model, or move the 'source_type override' into a helper.",
+    "server.py line ~1512 has dead code: `lm['total_leads_collection'] + totals['leads'] if False else totals['leads']` — the `if False else` is always the second branch; simplify to `totals['leads']`.",
+    "PATCH /events/{event_id}/kpis/{kpi_id} performs validation on merged state but does not re-validate source_type constraint — since source_type is not exposed on KpiUpdate this is fine, but explicit rejection of unknown fields is preferable.",
+    "GET /events/{event_id}/kpis validates channel/source_type filters but does not validate metric_date format — a malformed date string is silently used in the Mongo query.",
+    "server.py is 1670 lines and continues to grow; refactoring recommended.",
+    "csv_import repeats the `_resolve_event_and_campaign` per-row campaign check inline instead of reusing the helper (small DRY violation)."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (1-line fix: `d.pop('source_type', None)` before KpiRecordOut(...) in csv_import to prevent double-keyword TypeError)",
+    "/app/backend/tests/backend_test.py (updated test_global_verified_after_manual_metric → test_global_verified_after_kpi_record: dashboards no longer derive from post metrics; test now inserts an event_kpi_records row instead)",
+    "/app/backend/tests/test_kpi.py (new: 23 tests for Patch 2 KPI CRUD, RBAC, validation, tenant isolation, CSV dry-run/import, dashboard aggregation & rates, audit sanitization)"
+  ],
+  "success_rate": {"backend": "100% (66/66)", "frontend": "not tested"},
+  "test_credentials": "admin@campaign.ai / Admin@12345 (seeded on startup). Additional marketing/sales/viewer users created per-run with TEST_-prefix and cleaned up. Tenant B admin created via direct Mongo insert per session.",
+  "seed_data_creation": "Module-scoped fixtures create a dedicated KPI test event + campaign, three role-specific users (marketing/sales/viewer), and a full second-tenant setup (tenant + admin + event + campaign) via motor. Cleanup deletes all TEST_-prefixed users, the test event (cascade), Tenant B, all Tenant B docs, and any lingering event_kpi_records for the test event.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Patch 2 endpoints (GET/POST/PATCH/DELETE /api/events/{event_id}/kpis and /csv/dry-run + /csv/import) are all green after the one-line server.py fix. `test_kpi.py` uses module-scoped fixtures to avoid clashing with session-scoped fixtures in backend_test.py. If you extend, note that `test_event_dashboard_aggregations_and_rates` wipes and repopulates KPI rows for the KPI test event — order among TestKpiDashboards tests matters within the class. FERNET_KEY is valid; CORS_ORIGINS is explicit. Public URL hits pass through an ingress that adds wildcard CORS — CORS tests intentionally hit http://localhost:8001 directly.",
+  "rca of the issue": "server.py POST /api/events/{event_id}/kpis/csv/import — RCA: within the loop over `prepared` rows, each `d` dict already had `d['source_type'] = 'csv_import'` set earlier for validation. When constructing `KpiRecordOut(**d, ..., source_type='csv_import', ...)` Python raised `TypeError: multiple values for keyword argument 'source_type'`. Reproduction: POST valid rows to /csv/import → 500. Mitigation applied: `d.pop('source_type', None)` before the spread. Verified by re-running tests: happy path now returns 200 with inserted_count matching row count."
+}

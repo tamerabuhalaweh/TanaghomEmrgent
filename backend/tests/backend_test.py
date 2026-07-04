@@ -485,20 +485,17 @@ class TestDashboardsHonest:
         assert d["metrics_status"] == "no_verified_metrics"
         assert d["reach"] == 0
 
-    def test_global_verified_after_manual_metric(self, admin_headers, campaign_id):
-        # Ensure at least one post w/ manual reach in tenant 1.
-        p = requests.post(f"{API}/posts", json={
-            "campaign_id": campaign_id, "platform": "meta", "caption": "verified test"
+    def test_global_verified_after_kpi_record(self, admin_headers, event_id):
+        # Patch 2: dashboards derive from event_kpi_records, not posts.
+        r = requests.post(f"{API}/events/{event_id}/kpis", json={
+            "metric_date": "2026-02-01", "channel": "meta", "reach": 5000,
         }, headers=admin_headers, timeout=20)
-        assert p.status_code == 200
-        pid = p.json()["id"]
-        r = requests.patch(f"{API}/posts/{pid}", json={"reach": 5000},
-                           headers=admin_headers, timeout=20)
-        assert r.status_code == 200
-        assert r.json()["metric_source"] == "manual"
+        assert r.status_code == 200, r.text
         dash = requests.get(f"{API}/dashboard/global", headers=admin_headers, timeout=20).json()
         assert dash["metrics_status"] == "verified"
         assert dash["reach"] >= 5000
+        # Verify posts still return zeros (regression)
+        # (already covered by TestPosts)
 
 
 # ---------- CORS ----------

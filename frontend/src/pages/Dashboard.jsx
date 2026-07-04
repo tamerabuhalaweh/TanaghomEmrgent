@@ -12,6 +12,7 @@ import {
   Megaphone,
   ArrowRight,
   Info,
+  CheckCircle2,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -57,7 +58,7 @@ export default function Dashboard() {
         }
       />
 
-      {data?.metrics_status === "no_verified_metrics" && (
+      {data?.metrics_status === "no_verified_metrics" ? (
         <div
           className="mb-6 card-flat p-4 flex items-start gap-3 border-orange-200 bg-orange-50/60"
           data-testid="dashboard-metrics-banner"
@@ -69,11 +70,26 @@ export default function Dashboard() {
             </div>
             <div className="text-xs text-slate-600 mt-0.5">
               {data.metrics_message ||
-                "Connect analytics or import KPI data to populate performance metrics."}
+                "Add manual KPI data or import a CSV to populate performance metrics."}
             </div>
           </div>
         </div>
-      )}
+      ) : data?.metrics_status === "verified" ? (
+        <div
+          className="mb-6 card-flat p-4 flex items-start gap-3 border-green-200 bg-green-50/60"
+          data-testid="dashboard-metrics-verified"
+        >
+          <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-600 shrink-0" />
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              Verified KPI data
+            </div>
+            <div className="text-xs text-slate-600 mt-0.5">
+              Aggregated from {data.records_count} verified KPI record{data.records_count === 1 ? "" : "s"} across all events.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* KPI bento row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-8">

@@ -153,6 +153,20 @@ PERMISSIONS_BY_ROLE = {
 VALID_INTEGRATION_KINDS = ("gohighlevel", "zapier", "webhook")
 METRIC_SOURCES = ("none", "manual", "imported", "connector")
 
+# Event KPI record schema (verified analytics layer — no external calls).
+KPI_CHANNELS = (
+    "meta", "instagram", "youtube", "whatsapp", "email",
+    "organic", "dark_ad", "referral", "manual", "other",
+)
+KPI_SOURCE_TYPES = ("manual", "csv_import", "connector")
+KPI_INT_FIELDS = (
+    "reach", "impressions", "interactions", "clicks",
+    "form_completions", "leads", "meetings_booked",
+    "meetings_attended", "no_shows", "purchases",
+)
+KPI_FLOAT_FIELDS = ("spend", "revenue")
+KPI_NUMERIC_FIELDS = KPI_INT_FIELDS + KPI_FLOAT_FIELDS
+
 
 class BaseDoc(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -401,6 +415,74 @@ class AuditLogOut(BaseModel):
     result: str
     metadata: dict = {}
     created_at: str
+
+
+# --- Event KPI (verified metrics) ------------------------------------------
+class KpiRowInput(BaseModel):
+    """One KPI row as accepted from create/csv-import payloads."""
+    metric_date: str
+    channel: str
+    campaign_id: Optional[str] = None
+    reach: int = 0
+    impressions: int = 0
+    interactions: int = 0
+    clicks: int = 0
+    form_completions: int = 0
+    leads: int = 0
+    meetings_booked: int = 0
+    meetings_attended: int = 0
+    no_shows: int = 0
+    purchases: int = 0
+    spend: float = 0.0
+    revenue: float = 0.0
+    notes: Optional[str] = None
+
+
+class KpiUpdate(BaseModel):
+    metric_date: Optional[str] = None
+    channel: Optional[str] = None
+    campaign_id: Optional[str] = None
+    reach: Optional[int] = None
+    impressions: Optional[int] = None
+    interactions: Optional[int] = None
+    clicks: Optional[int] = None
+    form_completions: Optional[int] = None
+    leads: Optional[int] = None
+    meetings_booked: Optional[int] = None
+    meetings_attended: Optional[int] = None
+    no_shows: Optional[int] = None
+    purchases: Optional[int] = None
+    spend: Optional[float] = None
+    revenue: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class KpiRecordOut(BaseDoc):
+    event_id: str
+    campaign_id: Optional[str] = None
+    metric_date: str
+    channel: str
+    source_type: str
+    source_name: Optional[str] = None
+    reach: int = 0
+    impressions: int = 0
+    interactions: int = 0
+    clicks: int = 0
+    form_completions: int = 0
+    leads: int = 0
+    meetings_booked: int = 0
+    meetings_attended: int = 0
+    no_shows: int = 0
+    purchases: int = 0
+    spend: float = 0.0
+    revenue: float = 0.0
+    notes: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CsvRowsIn(BaseModel):
+    rows: List[KpiRowInput]
 
 
 # ---------------------------------------------------------------------------
@@ -999,6 +1081,302 @@ async def update_lead(lid: str, body: dict, actor: dict = Depends(require_role("
 
 
 # ---------------------------------------------------------------------------
+# Routes: Event KPI records (verified metrics layer)
+# ---------------------------------------------------------------------------
+def _validate_kpi_row(row: dict) -> Optional[str]:
+    """Return an error string or None. Applies structural + range rules."""
+    if not row.get("metric_date"):
+        return "metric_date is required"
+    if row.get("channel") not in KPI_CHANNELS:
+        return f"unknown channel: {row.get('channel')!r} (allowed: {', '.join(KPI_CHANNELS)})"
+    for f in KPI_NUMERIC_FIELDS:
+        v = row.get(f, 0)
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return f"{f} must be numeric"
+        if fv < 0:
+            return f"{f} must be non-negative"
+    # All-zero rule: only permitted if source_type=manual AND notes explain why.
+    all_zero = all(float(row.get(f, 0) or 0) == 0 for f in KPI_NUMERIC_FIELDS)
+    if all_zero:
+        if row.get("source_type") not in (None, "manual"):
+            return "all-zero rows are only allowed for source_type='manual'"
+        if not (row.get("notes") or "").strip():
+            return "all-zero row requires a non-empty 'notes' explanation"
+    return None
+
+
+async def _resolve_event_and_campaign(
+    tenant_id: str, event_id: str, campaign_id: Optional[str]
+) -> None:
+    ev = await db.events.find_one({"tenant_id": tenant_id, "id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found in your workspace")
+    if campaign_id:
+        c = await db.campaigns.find_one(
+            {"tenant_id": tenant_id, "id": campaign_id, "event_id": event_id}, {"_id": 0}
+        )
+        if not c:
+            raise HTTPException(400, "campaign_id does not belong to this event/tenant")
+
+
+def _kpi_notes_safe(notes: Optional[str]) -> Optional[str]:
+    """Trim overly long notes and strip likely-secret substrings for audit metadata."""
+    if not notes:
+        return notes
+    s = str(notes).strip()
+    if len(s) > 120:
+        s = s[:117] + "..."
+    lower = s.lower()
+    if any(h in lower for h in _SECRET_KEY_HINTS):
+        return "[redacted-notes]"
+    return s
+
+
+@api.get("/events/{event_id}/kpis", response_model=List[KpiRecordOut])
+async def list_kpis(
+    event_id: str,
+    channel: Optional[str] = None,
+    source_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(current_user),
+):
+    await _resolve_event_and_campaign(user["tenant_id"], event_id, None)
+    q: dict = {"tenant_id": user["tenant_id"], "event_id": event_id}
+    if channel:
+        if channel not in KPI_CHANNELS:
+            raise HTTPException(400, "unknown channel filter")
+        q["channel"] = channel
+    if source_type:
+        if source_type not in KPI_SOURCE_TYPES:
+            raise HTTPException(400, "unknown source_type filter")
+        q["source_type"] = source_type
+    if start_date or end_date:
+        date_q: dict = {}
+        if start_date:
+            date_q["$gte"] = start_date
+        if end_date:
+            date_q["$lte"] = end_date
+        q["metric_date"] = date_q
+    docs = await db.event_kpi_records.find(q, {"_id": 0}).sort("metric_date", -1).to_list(2000)
+    return [KpiRecordOut(**d) for d in docs]
+
+
+@api.post("/events/{event_id}/kpis", response_model=KpiRecordOut)
+async def create_kpi(
+    event_id: str,
+    body: KpiRowInput,
+    actor: dict = Depends(require_role("admin", "marketing")),
+):
+    await _resolve_event_and_campaign(actor["tenant_id"], event_id, body.campaign_id)
+    row = body.model_dump()
+    row["source_type"] = "manual"
+    err = _validate_kpi_row(row)
+    if err:
+        raise HTTPException(400, err)
+    doc = KpiRecordOut(
+        **body.model_dump(),
+        tenant_id=actor["tenant_id"],
+        event_id=event_id,
+        source_type="manual",
+        source_name="manual entry",
+        created_by_user_id=actor["id"],
+        updated_at=_now_iso(),
+    ).model_dump()
+    await db.event_kpi_records.insert_one(doc)
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="event_kpi_created", object_type="event_kpi",
+        object_id=doc["id"],
+        metadata={
+            "event_id": event_id, "channel": doc["channel"],
+            "metric_date": doc["metric_date"],
+            "notes_preview": _kpi_notes_safe(doc.get("notes")),
+        },
+    )
+    return KpiRecordOut(**_clean(doc))
+
+
+@api.patch("/events/{event_id}/kpis/{kpi_id}", response_model=KpiRecordOut)
+async def update_kpi(
+    event_id: str, kpi_id: str, body: KpiUpdate,
+    actor: dict = Depends(require_role("admin", "marketing")),
+):
+    update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(400, "Nothing to update")
+    # Fetch current row to validate merged state (numeric non-negativity, channel).
+    existing = await db.event_kpi_records.find_one(
+        {"tenant_id": actor["tenant_id"], "event_id": event_id, "id": kpi_id}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(404, "KPI record not found")
+    merged = {**existing, **update}
+    if update.get("campaign_id") is not None:
+        await _resolve_event_and_campaign(actor["tenant_id"], event_id, update["campaign_id"])
+    err = _validate_kpi_row(merged)
+    if err:
+        raise HTTPException(400, err)
+    update["updated_at"] = _now_iso()
+    d = await db.event_kpi_records.find_one_and_update(
+        {"tenant_id": actor["tenant_id"], "event_id": event_id, "id": kpi_id},
+        {"$set": update}, return_document=True,
+    )
+    if not d:
+        raise HTTPException(404, "KPI record not found")
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="event_kpi_updated", object_type="event_kpi", object_id=kpi_id,
+        metadata={"event_id": event_id, "fields": list(update.keys())},
+    )
+    return KpiRecordOut(**_clean(d))
+
+
+@api.delete("/events/{event_id}/kpis/{kpi_id}")
+async def delete_kpi(
+    event_id: str, kpi_id: str,
+    actor: dict = Depends(require_role("admin")),
+):
+    r = await db.event_kpi_records.delete_one(
+        {"tenant_id": actor["tenant_id"], "event_id": event_id, "id": kpi_id}
+    )
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="event_kpi_deleted", object_type="event_kpi", object_id=kpi_id,
+        result="success" if r.deleted_count else "failure",
+        metadata={"event_id": event_id},
+    )
+    return {"deleted": r.deleted_count}
+
+
+def _preview_totals(rows: List[dict]) -> dict:
+    tot: dict = {f: 0 for f in KPI_NUMERIC_FIELDS}
+    for r in rows:
+        for f in KPI_NUMERIC_FIELDS:
+            tot[f] += float(r.get(f, 0) or 0)
+    # Coerce int fields back to int for readability
+    for f in KPI_INT_FIELDS:
+        tot[f] = int(tot[f])
+    return tot
+
+
+@api.post("/events/{event_id}/kpis/csv/dry-run")
+async def csv_dry_run(
+    event_id: str, body: CsvRowsIn,
+    actor: dict = Depends(require_role("admin", "marketing")),
+):
+    await _resolve_event_and_campaign(actor["tenant_id"], event_id, None)
+    row_errors: list = []
+    valid_rows: list = []
+    for i, r in enumerate(body.rows):
+        d = r.model_dump()
+        d["source_type"] = "csv_import"
+        err = _validate_kpi_row(d)
+        if err:
+            row_errors.append({"row_index": i, "error": err})
+        else:
+            # Verify campaign belongs to event when supplied
+            if d.get("campaign_id"):
+                try:
+                    await _resolve_event_and_campaign(
+                        actor["tenant_id"], event_id, d["campaign_id"]
+                    )
+                except HTTPException as e:
+                    row_errors.append({"row_index": i, "error": e.detail})
+                    continue
+            valid_rows.append(d)
+    preview = _preview_totals(valid_rows)
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="event_kpi_csv_dry_run", object_type="event_kpi",
+        result="success" if not row_errors else "failure",
+        metadata={
+            "event_id": event_id, "input_count": len(body.rows),
+            "valid_count": len(valid_rows), "invalid_count": len(row_errors),
+        },
+    )
+    return {
+        "valid_count": len(valid_rows),
+        "invalid_count": len(row_errors),
+        "row_errors": row_errors,
+        "preview_totals": preview,
+    }
+
+
+@api.post("/events/{event_id}/kpis/csv/import")
+async def csv_import(
+    event_id: str, body: CsvRowsIn,
+    actor: dict = Depends(require_role("admin", "marketing")),
+):
+    await _resolve_event_and_campaign(actor["tenant_id"], event_id, None)
+    row_errors: list = []
+    prepared: list = []
+    for i, r in enumerate(body.rows):
+        d = r.model_dump()
+        d["source_type"] = "csv_import"
+        err = _validate_kpi_row(d)
+        if err:
+            row_errors.append({"row_index": i, "error": err})
+            continue
+        if d.get("campaign_id"):
+            c = await db.campaigns.find_one(
+                {"tenant_id": actor["tenant_id"], "id": d["campaign_id"], "event_id": event_id},
+                {"_id": 0},
+            )
+            if not c:
+                row_errors.append({"row_index": i, "error": "campaign_id does not belong to this event/tenant"})
+                continue
+        prepared.append(d)
+
+    if row_errors:
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="event_kpi_csv_imported", object_type="event_kpi",
+            result="failure",
+            metadata={
+                "event_id": event_id, "input_count": len(body.rows),
+                "invalid_count": len(row_errors),
+            },
+        )
+        raise HTTPException(
+            400,
+            {"message": "One or more rows failed validation; nothing imported.",
+             "row_errors": row_errors},
+        )
+
+    now = _now_iso()
+    docs = []
+    for d in prepared:
+        d.pop("source_type", None)
+        rec = KpiRecordOut(
+            **d,
+            tenant_id=actor["tenant_id"],
+            event_id=event_id,
+            source_type="csv_import",
+            source_name="csv upload",
+            created_by_user_id=actor["id"],
+            updated_at=now,
+        ).model_dump()
+        docs.append(rec)
+    if docs:
+        await db.event_kpi_records.insert_many(docs)
+    totals = _preview_totals(prepared)
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="event_kpi_csv_imported", object_type="event_kpi",
+        result="success",
+        metadata={
+            "event_id": event_id, "inserted_count": len(docs),
+        },
+    )
+    return {"inserted_count": len(docs), "totals": totals}
+
+
+# ---------------------------------------------------------------------------
 # Routes: Audit logs
 # ---------------------------------------------------------------------------
 @api.get("/audit-logs", response_model=List[AuditLogOut])
@@ -1013,31 +1391,57 @@ async def list_audit_logs(
 
 
 # ---------------------------------------------------------------------------
-# Routes: Dashboards (honest metrics)
+# Routes: Dashboards (verified KPI aggregation)
 # ---------------------------------------------------------------------------
-async def _campaign_metrics(tenant_id: str, event_id: Optional[str] = None) -> dict:
+async def _kpi_aggregate(tenant_id: str, event_id: Optional[str] = None) -> dict:
+    """Aggregate verified KPI records. Returns totals + per-channel + per-source + trend."""
+    q: dict = {"tenant_id": tenant_id}
+    if event_id:
+        q["event_id"] = event_id
+    docs = await db.event_kpi_records.find(q, {"_id": 0}).to_list(10000)
+    totals: dict = {f: 0 for f in KPI_NUMERIC_FIELDS}
+    channel_breakdown: dict = {}
+    source_breakdown: dict = {}
+    by_date: dict = {}
+    for d in docs:
+        for f in KPI_NUMERIC_FIELDS:
+            totals[f] += float(d.get(f, 0) or 0)
+        ch = d.get("channel", "other")
+        cb = channel_breakdown.setdefault(ch, {"channel": ch, **{f: 0 for f in KPI_NUMERIC_FIELDS}})
+        for f in KPI_NUMERIC_FIELDS:
+            cb[f] += float(d.get(f, 0) or 0)
+        st = d.get("source_type", "manual")
+        sb = source_breakdown.setdefault(st, {"source_type": st, "records": 0, "spend": 0.0, "reach": 0, "leads": 0})
+        sb["records"] += 1
+        sb["spend"] += float(d.get("spend", 0) or 0)
+        sb["reach"] += int(d.get("reach", 0) or 0)
+        sb["leads"] += int(d.get("leads", 0) or 0)
+        date_key = d.get("metric_date") or ""
+        tk = by_date.setdefault(date_key, {"date": date_key, "reach": 0, "engagement": 0, "leads": 0, "spend": 0.0, "revenue": 0.0})
+        tk["reach"] += int(d.get("reach", 0) or 0)
+        tk["engagement"] += int(d.get("interactions", 0) or 0)
+        tk["leads"] += int(d.get("leads", 0) or 0)
+        tk["spend"] += float(d.get("spend", 0) or 0)
+        tk["revenue"] += float(d.get("revenue", 0) or 0)
+    for f in KPI_INT_FIELDS:
+        totals[f] = int(totals[f])
+    return {
+        "records_count": len(docs),
+        "totals": totals,
+        "channel_breakdown": list(channel_breakdown.values()),
+        "source_breakdown": list(source_breakdown.values()),
+        "trend": sorted(by_date.values(), key=lambda x: x["date"]),
+    }
+
+
+async def _campaign_budget(tenant_id: str, event_id: Optional[str] = None) -> dict:
     q: dict = {"tenant_id": tenant_id}
     if event_id:
         q["event_id"] = event_id
     campaigns = await db.campaigns.find(q, {"_id": 0}).to_list(500)
-    campaign_ids = [c["id"] for c in campaigns]
-    posts_q: dict = {"tenant_id": tenant_id}
-    if campaign_ids:
-        posts_q["campaign_id"] = {"$in": campaign_ids}
-    else:
-        posts_q["campaign_id"] = {"$in": []}
-    posts = await db.posts.find(posts_q, {"_id": 0}).to_list(2000)
-    verified = [p for p in posts if p.get("metric_source") and p["metric_source"] != "none"]
     return {
-        "reach": sum(p.get("reach", 0) for p in verified),
-        "impressions": sum(p.get("impressions", 0) for p in verified),
-        "engagement": sum(p.get("engagement", 0) for p in verified),
-        "clicks": sum(p.get("clicks", 0) for p in verified),
-        "budget_planned": sum(c.get("budget_planned", 0) for c in campaigns),
-        "budget_actual": sum(c.get("budget_actual", 0) for c in campaigns),
-        "posts_count": len(posts),
-        "verified_posts_count": len(verified),
         "campaigns_count": len(campaigns),
+        "budget_planned": sum(c.get("budget_planned", 0) for c in campaigns),
     }
 
 
@@ -1051,11 +1455,19 @@ async def _lead_metrics(tenant_id: str, event_id: Optional[str] = None) -> dict:
         s = lead.get("stage", "new")
         if s in stages:
             stages[s] += 1
-    return {"total_leads": len(leads), **{f"leads_{k}": v for k, v in stages.items()}}
+    return {"total_leads_collection": len(leads), **{f"leads_{k}": v for k, v in stages.items()}}
 
 
-def _metrics_status_block(c_metrics: dict) -> dict:
-    if c_metrics["verified_posts_count"] == 0:
+def _safe_ratio(num: float, denom: float) -> float:
+    return round((num / denom) * 100, 2) if denom else 0.0
+
+
+def _safe_div(num: float, denom: float) -> float:
+    return round(num / denom, 2) if denom else 0.0
+
+
+def _status_block(records_count: int) -> dict:
+    if records_count == 0:
         return {
             "metrics_status": "no_verified_metrics",
             "metrics_message": "Connect analytics or import KPI data to populate performance metrics.",
@@ -1067,23 +1479,48 @@ def _metrics_status_block(c_metrics: dict) -> dict:
 async def dashboard_global(user: dict = Depends(current_user)):
     tid = user["tenant_id"]
     events = await db.events.find(_tq(user), {"_id": 0}).to_list(500)
-    c = await _campaign_metrics(tid)
+    kpi = await _kpi_aggregate(tid)
     lm = await _lead_metrics(tid)
-    status_block = _metrics_status_block(c)
-    # Honest trend: only distribute verified data; otherwise flat zeros.
-    trend: list = []
-    today = datetime.now(timezone.utc).date()
-    per_day_reach = (c["reach"] / 14) if c["verified_posts_count"] and c["reach"] else 0
-    per_day_engagement = (c["engagement"] / 14) if c["verified_posts_count"] and c["engagement"] else 0
-    for i in range(13, -1, -1):
-        day = today - timedelta(days=i)
-        trend.append({
-            "date": day.isoformat(),
-            "reach": int(per_day_reach),
-            "engagement": int(per_day_engagement),
-            "leads": 0,
-        })
-    return {"events_count": len(events), **c, **lm, "trend": trend, **status_block}
+    b = await _campaign_budget(tid)
+    posts_count = await db.posts.count_documents({"tenant_id": tid})
+    totals = kpi["totals"]
+    spend = totals["spend"]
+    revenue = totals["revenue"]
+    roi = _safe_ratio(revenue - spend, spend)
+    return {
+        "events_count": len(events),
+        "campaigns_count": b["campaigns_count"],
+        "posts_count": posts_count,
+        "records_count": kpi["records_count"],
+        "budget_planned": b["budget_planned"],
+        "budget_actual": spend,
+        # Verified KPI totals
+        "reach": totals["reach"],
+        "impressions": totals["impressions"],
+        "interactions": totals["interactions"],
+        "engagement": totals["interactions"],  # alias for legacy frontend
+        "clicks": totals["clicks"],
+        "form_completions": totals["form_completions"],
+        "leads": totals["leads"],
+        "meetings_booked": totals["meetings_booked"],
+        "meetings_attended": totals["meetings_attended"],
+        "no_shows": totals["no_shows"],
+        "purchases": totals["purchases"],
+        "spend": spend,
+        "revenue": revenue,
+        "roi_percent": roi,
+        # Legacy funnel counts from leads collection (unchanged)
+        "total_leads": lm["total_leads_collection"] + totals["leads"] if False else totals["leads"],
+        "leads_new": lm["leads_new"],
+        "leads_form_filled": lm["leads_form_filled"],
+        "leads_booked": lm["leads_booked"],
+        "leads_purchased": lm["leads_purchased"],
+        "leads_no_show": lm["leads_no_show"],
+        "trend": kpi["trend"],
+        "channel_breakdown": kpi["channel_breakdown"],
+        "source_type_breakdown": kpi["source_breakdown"],
+        **_status_block(kpi["records_count"]),
+    }
 
 
 @api.get("/dashboard/event/{event_id}")
@@ -1092,34 +1529,73 @@ async def dashboard_event(event_id: str, user: dict = Depends(current_user)):
     event = await db.events.find_one(_tq(user, {"id": event_id}), {"_id": 0})
     if not event:
         raise HTTPException(404, "Event not found")
-    c = await _campaign_metrics(tid, event_id)
+    kpi = await _kpi_aggregate(tid, event_id)
     lm = await _lead_metrics(tid, event_id)
-    status_block = _metrics_status_block(c)
-
-    price = event.get("ticket_price") or 0
-    revenue = price * lm["leads_purchased"]
-    roi = ((revenue - c["budget_actual"]) / c["budget_actual"] * 100) if c["budget_actual"] else 0
-
+    b = await _campaign_budget(tid, event_id)
     campaigns = await db.campaigns.find(_tq(user, {"event_id": event_id}), {"_id": 0}).to_list(500)
-    campaign_ids = [x["id"] for x in campaigns] or [""]
-    posts = await db.posts.find(
-        {"tenant_id": tid, "campaign_id": {"$in": campaign_ids}}, {"_id": 0}
-    ).to_list(2000)
-    by_platform: dict = {}
-    for p in posts:
-        if not p.get("metric_source") or p["metric_source"] == "none":
-            continue
-        pl = p.get("platform", "other")
-        by_platform.setdefault(pl, {"platform": pl, "reach": 0, "engagement": 0, "posts": 0})
-        by_platform[pl]["reach"] += p.get("reach", 0)
-        by_platform[pl]["engagement"] += p.get("engagement", 0)
-        by_platform[pl]["posts"] += 1
-
+    campaign_ids = [c["id"] for c in campaigns]
+    posts_in_event = await db.posts.count_documents(
+        {"tenant_id": tid, "campaign_id": {"$in": campaign_ids or [""]}}
+    )
+    totals = kpi["totals"]
+    spend = totals["spend"]
+    revenue = totals["revenue"]
+    planned = b["budget_planned"]
+    roi = _safe_ratio(revenue - spend, spend)
+    form_completion_rate = _safe_ratio(totals["form_completions"], totals["clicks"])
+    lead_to_purchase_rate = _safe_ratio(totals["purchases"], totals["leads"])
+    meeting_show_rate = _safe_ratio(totals["meetings_attended"], totals["meetings_booked"])
+    cost_per_lead = _safe_div(spend, totals["leads"])
+    cost_per_purchase = _safe_div(spend, totals["purchases"])
+    budget_variance = planned - spend
     return {
-        "event": event, **c, **lm,
-        "revenue": revenue, "roi_percent": roi,
-        "platform_breakdown": list(by_platform.values()),
-        **status_block,
+        "event": event,
+        "campaigns_count": len(campaigns),
+        "posts_count": posts_in_event,
+        "records_count": kpi["records_count"],
+        # Budget
+        "budget_planned": planned,
+        "actual_spend": spend,
+        "budget_actual": spend,  # legacy alias
+        "budget_variance": budget_variance,
+        # KPI totals
+        "reach": totals["reach"],
+        "impressions": totals["impressions"],
+        "interactions": totals["interactions"],
+        "engagement": totals["interactions"],
+        "clicks": totals["clicks"],
+        "form_completions": totals["form_completions"],
+        "leads": totals["leads"],
+        "meetings_booked": totals["meetings_booked"],
+        "meetings_attended": totals["meetings_attended"],
+        "no_shows": totals["no_shows"],
+        "purchases": totals["purchases"],
+        "spend": spend,
+        "revenue": revenue,
+        "roi_percent": roi,
+        # Derived rates
+        "form_completion_rate": form_completion_rate,
+        "lead_to_purchase_rate": lead_to_purchase_rate,
+        "meeting_show_rate": meeting_show_rate,
+        "cost_per_lead": cost_per_lead,
+        "cost_per_purchase": cost_per_purchase,
+        # Legacy funnel from leads collection (unchanged)
+        "total_leads": totals["leads"],
+        "leads_new": lm["leads_new"],
+        "leads_form_filled": lm["leads_form_filled"],
+        "leads_booked": lm["leads_booked"],
+        "leads_purchased": lm["leads_purchased"],
+        "leads_no_show": lm["leads_no_show"],
+        # Breakdowns
+        "channel_breakdown": kpi["channel_breakdown"],
+        "source_type_breakdown": kpi["source_breakdown"],
+        # Legacy platform_breakdown shape kept for existing pie chart
+        "platform_breakdown": [
+            {"platform": ch["channel"], "reach": ch["reach"], "engagement": ch["interactions"], "posts": 0}
+            for ch in kpi["channel_breakdown"]
+        ],
+        "trend": kpi["trend"],
+        **_status_block(kpi["records_count"]),
     }
 
 

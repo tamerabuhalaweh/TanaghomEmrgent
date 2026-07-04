@@ -4,8 +4,9 @@ import { PageHeader, KpiCard, SectionTitle, currency, nfmt } from "../components
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import Modal from "../components/Modal";
+import EventKpiPanel from "../components/EventKpiPanel";
 import {
-  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info,
+  Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -165,7 +166,7 @@ export default function EventDetail() {
       </div>
 
       <div className="p-6 md:p-10 max-w-[1400px] mx-auto">
-        {dash?.metrics_status === "no_verified_metrics" && (
+        {dash?.metrics_status === "no_verified_metrics" ? (
           <div
             className="mb-6 card-flat p-4 flex items-start gap-3 border-orange-200 bg-orange-50/60"
             data-testid="event-metrics-banner"
@@ -177,11 +178,26 @@ export default function EventDetail() {
               </div>
               <div className="text-xs text-slate-600 mt-0.5">
                 {dash.metrics_message ||
-                  "Connect analytics or import KPI data to populate performance."}
+                  "Add manual KPI data or import a CSV to populate performance."}
               </div>
             </div>
           </div>
-        )}
+        ) : dash?.metrics_status === "verified" ? (
+          <div
+            className="mb-6 card-flat p-4 flex items-start gap-3 border-green-200 bg-green-50/60"
+            data-testid="event-metrics-verified"
+          >
+            <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-600 shrink-0" />
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                Verified KPI data
+              </div>
+              <div className="text-xs text-slate-600 mt-0.5">
+                Metrics are aggregated from {dash.records_count} verified KPI record{dash.records_count === 1 ? "" : "s"}.
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Funnel KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mb-8 -mt-16 relative z-10">
@@ -278,6 +294,9 @@ export default function EventDetail() {
             )}
           </div>
         </div>
+
+        {/* Verified KPI records + CSV import */}
+        <EventKpiPanel eventId={id} onChanged={load} />
 
         {/* Campaigns */}
         <div className="card-flat p-5 mb-8">
