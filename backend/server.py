@@ -245,7 +245,7 @@ class LLMKeyOut(BaseModel):
     model: Optional[str]
     label: Optional[str]
     key_masked: str
-    use_emergent: bool = False
+    use_universal_adapter: bool = False
     created_at: str
 
 
@@ -732,7 +732,7 @@ async def list_llm_keys(user: dict = Depends(require_role("admin"))):
         LLMKeyOut(
             id=d["id"], provider=d["provider"], model=d.get("model"),
             label=d.get("label"), key_masked=mask(decrypt(d["api_key_enc"])),
-            use_emergent=d.get("use_emergent", False), created_at=d["created_at"],
+            use_universal_adapter=d.get("use_universal_adapter", d.get("use_emergent", False)), created_at=d["created_at"],
         )
         for d in docs
     ]
@@ -746,7 +746,7 @@ async def add_llm_key(body: LLMKeyIn, actor: dict = Depends(require_role("admin"
         "id": str(uuid.uuid4()),
         "tenant_id": actor["tenant_id"],
         "provider": body.provider, "model": body.model, "label": body.label,
-        "api_key_enc": encrypt(body.api_key), "use_emergent": False,
+        "api_key_enc": encrypt(body.api_key), "use_universal_adapter": False,
         "created_at": _now_iso(),
     }
     await db.llm_keys.insert_one(doc)
@@ -758,7 +758,7 @@ async def add_llm_key(body: LLMKeyIn, actor: dict = Depends(require_role("admin"
     return LLMKeyOut(
         id=doc["id"], provider=doc["provider"], model=doc.get("model"),
         label=doc.get("label"), key_masked=mask(body.api_key),
-        use_emergent=False, created_at=doc["created_at"],
+        use_universal_adapter=False, created_at=doc["created_at"],
     )
 
 
@@ -2024,6 +2024,7 @@ def _register_planner(spec: dict) -> None:
     Model = spec["model"]
     write_roles = spec["write_roles"]
     enums = spec.get("enums", {})
+    allowed_fields = set(Model.model_fields.keys()) | {"notes"}
 
     def _check_enums(payload: dict) -> Optional[str]:
         for field, allowed in enums.items():
@@ -2031,6 +2032,9 @@ def _register_planner(spec: dict) -> None:
             if v is not None and v not in allowed:
                 return f"{field} must be one of {allowed}"
         return None
+
+    def _unknown_fields(payload: dict) -> list:
+        return sorted(k for k in payload.keys() if k not in allowed_fields)
 
     @api.get(f"/events/{{event_id}}/{path}", name=f"list_{coll}")
     async def _list(event_id: str, user: dict = Depends(current_user)):
@@ -2046,6 +2050,9 @@ def _register_planner(spec: dict) -> None:
         body: dict = Body(...),
         actor: dict = Depends(require_role(*write_roles)),
     ):
+        unknown = _unknown_fields(body)
+        if unknown:
+            raise HTTPException(400, f"Unknown fields: {', '.join(unknown)}")
         try:
             parsed = Model(**body)
         except Exception as e:
@@ -2080,12 +2087,19 @@ def _register_planner(spec: dict) -> None:
     ):
         for r in ("id", "_id", "created_at", "tenant_id", "event_id", "created_by"):
             body.pop(r, None)
+        unknown = _unknown_fields(body)
+        if unknown:
+            raise HTTPException(400, f"Unknown fields: {', '.join(unknown)}")
         existing = await db[coll].find_one(
             _tq(actor, {"id": item_id, "event_id": event_id}), {"_id": 0}
         )
         if not existing:
             raise HTTPException(404, f"{obj} not found")
         merged = {**existing, **body}
+        try:
+            Model(**{k: merged.get(k) for k in allowed_fields})
+        except Exception as e:
+            raise HTTPException(422, str(e))
         err = _check_enums(merged)
         if err:
             raise HTTPException(400, err)

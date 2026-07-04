@@ -90,7 +90,7 @@ export default function Settings() {
         <div>
           <div className="flex justify-between items-center mb-4">
             <div className="text-sm text-slate-500">
-              Add provider keys to unlock full-power generation. The Emergent universal key is used by default.
+              Add provider keys to unlock full-power generation. Keys stay tenant-owned and are never shown after saving.
             </div>
             <button onClick={() => setOpenKey(true)} className="btn btn-primary" data-testid="llm-add-btn">
               <Plus className="w-4 h-4" /> {t("addKey")}
@@ -99,7 +99,7 @@ export default function Settings() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="card-flat p-5">
               <div className="badge-pill badge-orange">Default</div>
-              <div className="mt-2 text-lg font-bold text-slate-900">Emergent Universal Key</div>
+              <div className="mt-2 text-lg font-bold text-slate-900">AI Provider Key</div>
               <div className="text-xs text-slate-500 mt-1">Works with OpenAI, Anthropic, Gemini.</div>
             </div>
             {keys.map((k) => (

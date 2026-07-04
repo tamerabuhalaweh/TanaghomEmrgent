@@ -28,8 +28,7 @@ import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL")
-            or "http://localhost:8001").rstrip("/")
+BASE_URL = (os.environ.get("API_BASE_URL") or "http://localhost:8001").rstrip("/")
 API = f"{BASE_URL}/api"
 ADMIN_EMAIL = "admin@campaign.ai"
 ADMIN_PASS = "Admin@12345"
@@ -365,6 +364,45 @@ def test_enum_patch_email_approval_status(admin_headers, event_id):
     assert "approval_status" in p.text
     requests.delete(f"{API}/events/{event_id}/email-plans/{iid}",
                     headers=admin_headers, timeout=20)
+
+
+def test_planner_patch_rejects_unknown_fields(admin_headers, event_id):
+    cases = [
+        ("content-requirements", _body_content),
+        ("budget-plans", _body_budget),
+        ("sales-tasks", _body_sales),
+    ]
+    for path, body_fn in cases:
+        base = f"{API}/events/{event_id}/{path}"
+        r = requests.post(base, json=body_fn(), headers=admin_headers, timeout=20)
+        assert r.status_code == 200, r.text
+        iid = r.json()["id"]
+
+        p = requests.patch(
+            f"{base}/{iid}",
+            json={"unexpected_field": "must-not-persist"},
+            headers=admin_headers,
+            timeout=20,
+        )
+        assert p.status_code == 400
+        assert "Unknown fields" in p.text
+
+        rows = requests.get(base, headers=admin_headers, timeout=20).json()
+        current = next(x for x in rows if x["id"] == iid)
+        assert "unexpected_field" not in current
+
+        requests.delete(f"{base}/{iid}", headers=admin_headers, timeout=20)
+
+
+def test_planner_create_rejects_unknown_fields(admin_headers, event_id):
+    r = requests.post(
+        f"{API}/events/{event_id}/budget-plans",
+        json={**_body_budget(), "unexpected_field": "must-not-persist"},
+        headers=admin_headers,
+        timeout=20,
+    )
+    assert r.status_code == 400
+    assert "Unknown fields" in r.text
 
 
 # ===========================================================================

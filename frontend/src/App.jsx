@@ -18,7 +18,7 @@ function Protected({ children, adminOnly }) {
   if (loading) {
     return (
       <div className="min-h-screen grid place-items-center text-slate-500 text-sm">
-        Loading…
+        Loading...
       </div>
     );
   }
