@@ -87,7 +87,148 @@ def _extract_json(text: str):
                 return json.loads(text[i:j + 1])
             except Exception:
                 continue
+    objects = _extract_complete_json_objects(text)
+    if objects:
+        return objects
     return None
+
+
+def _extract_complete_json_objects(text: str) -> list:
+    """Salvage complete JSON objects from a partially truncated JSON array."""
+    objects = []
+    start = None
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+        if char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    parsed = json.loads(text[start:idx + 1])
+                    if isinstance(parsed, dict):
+                        objects.append(parsed)
+                except Exception:
+                    pass
+                start = None
+
+    return objects
+
+
+def _as_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
+
+
+def _normalize_hashtags(value) -> list:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = _as_text(value)
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"[\s,]+", text) if part.strip()]
+
+
+def _first_sentence(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return ""
+    parts = re.split(r"(?<=[.!?؟])\s+", cleaned, maxsplit=1)
+    return parts[0][:160].strip()
+
+
+def _unwrap_idea_payload(parsed) -> list:
+    if isinstance(parsed, list):
+        return parsed
+    if not isinstance(parsed, dict):
+        return []
+    for key in ("ideas", "posts", "results", "items", "content"):
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return value
+    list_values = [value for value in parsed.values() if isinstance(value, list)]
+    if len(list_values) == 1:
+        return list_values[0]
+    return [parsed]
+
+
+def _normalize_post_ideas(parsed, *, platforms: list, n: int) -> list:
+    allowed_platforms = [str(platform).lower() for platform in (platforms or []) if str(platform).strip()]
+    if not allowed_platforms:
+        allowed_platforms = ["instagram", "meta", "youtube"]
+
+    normalized = []
+    for idx, item in enumerate(_unwrap_idea_payload(parsed)):
+        if not isinstance(item, dict):
+            continue
+
+        caption = _as_text(
+            item.get("caption")
+            or item.get("body")
+            or item.get("content")
+            or item.get("text")
+            or item.get("description")
+            or item.get("idea")
+        )
+        hook = _as_text(item.get("hook") or item.get("headline") or item.get("title"))
+        if not hook and caption:
+            hook = _first_sentence(caption)
+        if not caption and hook:
+            caption = hook
+        if not hook and not caption:
+            continue
+
+        platform = _as_text(item.get("platform")).lower()
+        if platform not in allowed_platforms:
+            platform = allowed_platforms[idx % len(allowed_platforms)]
+
+        idea = {
+            "platform": platform,
+            "format": _as_text(item.get("format") or item.get("type")) or _default_format_for_platform(platform),
+            "hook": hook,
+            "caption": caption,
+            "cta": _as_text(item.get("cta") or item.get("call_to_action") or item.get("action")) or "Register now",
+            "hashtags": _normalize_hashtags(item.get("hashtags") or item.get("tags")),
+            "reasoning": _as_text(item.get("reasoning") or item.get("why") or item.get("strategy")) or "Aligned with the selected audience and platform.",
+        }
+        normalized.append(idea)
+        if len(normalized) >= n:
+            break
+
+    return normalized
+
+
+def _default_format_for_platform(platform: str) -> str:
+    if platform in {"instagram", "tiktok"}:
+        return "reel"
+    if platform == "youtube":
+        return "video"
+    if platform == "email":
+        return "email"
+    if platform == "whatsapp":
+        return "text"
+    return "text"
 
 
 def _extract_gemini_text(payload: dict) -> str:
@@ -175,7 +316,7 @@ async def _send_gemma_message(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 900,
+        "max_tokens": 1600,
         "top_p": 0.9,
         "stream": False,
     }
@@ -229,7 +370,8 @@ async def generate_post_ideas(
     system_message = (
         "You are an elite social-media strategist and copywriter specializing in "
         "event marketing, FOMO campaigns, and multi-platform content. "
-        "You output strict JSON only, no prose outside the JSON."
+        "You output strict JSON only, no prose outside the JSON. "
+        "Keep JSON property names in English exactly as requested; translate only the values."
         f" {lang_instr}"
     )
 
@@ -257,7 +399,8 @@ TARGET AUDIENCE:
 TARGET PLATFORMS: {', '.join(platforms)}
 OPTIMIZATION GOAL: {goal.replace('_', ' ')}
 
-Return ONLY a JSON array following this exact schema:
+Return ONLY a JSON array following this exact schema.
+Do not wrap it in an object. Do not use markdown. Do not translate JSON keys.
 {schema}
 
 Ensure each idea targets a specific platform from the list. Vary formats.
@@ -273,9 +416,13 @@ Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
             user_prompt=user_prompt,
         )
         parsed = _extract_json(resp) or []
-        if isinstance(parsed, dict):
-            parsed = [parsed]
-        return parsed
+        ideas = _normalize_post_ideas(parsed, platforms=platforms, n=max(1, min(n, 8)))
+        if not ideas:
+            raise LLMProviderError(
+                "Gemini returned text, but no usable post ideas. Try again or reduce the number of ideas.",
+                status_code=502,
+            )
+        return ideas
 
     if provider == "gemma":
         resp = await _send_gemma_message(
@@ -285,9 +432,13 @@ Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
             user_prompt=user_prompt,
         )
         parsed = _extract_json(resp) or []
-        if isinstance(parsed, dict):
-            parsed = [parsed]
-        return parsed
+        ideas = _normalize_post_ideas(parsed, platforms=platforms, n=max(1, min(n, 8)))
+        if not ideas:
+            raise LLMProviderError(
+                "Gemma returned text, but no usable post ideas. Try again or reduce the number of ideas.",
+                status_code=502,
+            )
+        return ideas
 
     resolved_key = _resolve_api_key(api_key)
     _ensure_llm_adapter_available(resolved_key)
@@ -300,9 +451,13 @@ Make hooks pattern-interrupting. CTAs must drive to registration/purchase.
 
     resp = await chat.send_message(UserMessage(text=user_prompt))
     parsed = _extract_json(resp) or []
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    return parsed
+    ideas = _normalize_post_ideas(parsed, platforms=platforms, n=max(1, min(n, 8)))
+    if not ideas:
+        raise LLMProviderError(
+            "AI provider returned text, but no usable post ideas. Try again or reduce the number of ideas.",
+            status_code=502,
+        )
+    return ideas
 
 
 async def suggest_campaign_strategy(
