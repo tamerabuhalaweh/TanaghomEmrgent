@@ -49,8 +49,23 @@ Build an AI-powered social media campaign platform with:
 - Integrations — catalog (GoHighLevel, Zapier, Webhook) + connected list
 
 ### Testing
-- 33/33 backend tests passing (auth, RBAC, CRUD, dashboards, encrypted storage, real LLM generation)
+- 43/43 backend tests passing after Patch 1 (production foundation — tenant isolation, audit log, honest metrics, secret masking, CORS, env validation)
 - Seed data cleanup implemented
+
+## Patch 1 — Production Foundation (2026-07-04)
+Additions to backend/server.py without touching UI design:
+- **Tenants** — `tenants` collection + `default` tenant seeded on startup. `tenant_id` on every user + JWT + every business doc. Legacy pre-tenant docs auto-backfilled.
+- **Tenant isolation** — all list/get/patch/delete filter by caller's `tenant_id`; cross-tenant reads/writes return 404.
+- **Audit log** — new `audit_logs` collection + `audit()` helper wired into login (success/failure), user/LLM key/social/integration/event/campaign/post/lead mutations. `GET /api/audit-logs` (admin, tenant-scoped). Metadata sanitizer strips any `password/api_key/token/secret/*` field.
+- **Honest metrics** — post creation no longer seeds random reach/impressions/clicks/engagement. Defaults are `0` + `metric_source: none`. PATCH with metric values sets `metric_source: manual`. Dashboards return `metrics_status: no_verified_metrics` + `metrics_message` when nothing is verified.
+- **Env validation** — MONGO_URL, DB_NAME, JWT_SECRET, FERNET_KEY, CORS_ORIGINS all required at boot (RuntimeError otherwise). FERNET_KEY validated at boot. Wildcard `*` in CORS_ORIGINS rejected.
+- **Integrations** — `kind` whitelist enforced (400 on invalid). Response fields renamed to reality: `status: credential_saved`, `validated: false`, `live_sync_enabled: false`.
+- **Frontend labels only** — Dashboard + Event dashboard show "Verified metrics pending" banner when backend returns `no_verified_metrics`. Integrations page replaces green "Connected" pill with `Credential saved • Not validated • Live sync off`.
+
+### Still deferred (out of Patch 1 scope)
+- Real GoHighLevel / Meta / YouTube API calls (validation + live sync)
+- Actual analytics import connectors (post metric ingestion)
+- Multi-workspace UI (tenants are foundation only — no create-workspace UI yet)
 
 ## Backlog
 ### P0 — after MVP feedback
