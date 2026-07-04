@@ -407,7 +407,7 @@ class LeadIn(BaseModel):
 
 
 class LeadOut(BaseDoc):
-    event_id: str
+    event_id: Optional[str] = None
     name: str
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -1561,6 +1561,8 @@ async def delete_ghl_mapping(
         action="ghl_mapping_deleted", object_type="ghl_mapping",
         object_id=mid, result="success" if r.deleted_count else "failure",
     )
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Mapping not found")
     return {"deleted": r.deleted_count}
 
 

@@ -107,6 +107,39 @@ Adds the verified-metrics data layer. No external API calls yet.
 - `@app.on_event` → FastAPI `lifespan` migration
 - Frontend "Import Valid Rows" respecting per-row invalid dropping (currently import is atomic on the whole payload — matches the backend contract)
 
+## Patch 3 — GoHighLevel Lead Sync Foundation (2026-07-04)
+GHL is source of truth for leads. Campaign OS is the operating & reporting mirror. No real GHL calls unless tenant credential exists AND `GHL_READ_SYNC_ENABLED=true`.
+
+### Backend
+- New `/app/backend/ghl_client.py` — pure normalization + mapping helpers (`normalize_ghl_contact`, `normalize_ghl_opportunity`, `_index_mappings`, `map_ghl_lead`, `build_write_back_payload`) and two thin async wrappers (`fetch_contacts`, `fetch_opportunities`) around `POST /contacts/search` and `GET /opportunities/search`. Isolated for testability.
+- New `ghl_mappings` collection with CRUD (`GET/POST/PATCH/DELETE /api/ghl/mappings`), tenant-scoped, admin+marketing mutate, sales/viewer read. Validation: `mapping_type ∈ {tag,pipeline_stage}`, `target_type ∈ {lead_status,lead_temperature}`, `target_value` matched to its target_type vocabulary, `direction ∈ {inbound,outbound,bidirectional}`. DELETE returns 404 when nothing removed.
+- `GET /api/ghl/status` — readiness check. Returns `credential_status`, `location_id_status`, `mapping_status` (missing/partial/ready), `read_sync_enabled`, `write_back_enabled=false`, `source_of_truth='gohighlevel'`, `local_role='operating_reporting_layer'`, `required_actions[]`. **Never** calls GHL.
+- `POST /api/ghl/pull-preview` — admin+marketing+sales. Blocks (no HTTP) when credential/location missing or env flag off. When ready, fetches + normalizes + maps and returns `preview[]` with `mapped_lead_status`, `mapped_lead_temperature`, `source_of_truth='gohighlevel'`, `raw_payload_returned=false`. Audits `ghl_pull_preview`.
+- `POST /api/ghl/pull-sync` — admin+marketing only. Same block/prechecks. Upserts local leads with `source_of_truth='gohighlevel'`, `external_source_provider`, `external_source_id`, `external_opportunity_id`, `external_tags`, `external_stage_id`, `external_last_synced_at`. Upsert match order: `external_source_id` → email → phone (tenant-scoped). Purchase override: opportunity status in `{won, closed_won, purchased}` forces `stage='purchased'` + `lead_temperature='buyer'` + `purchase_amount=monetary_value`.
+- `POST /api/ghl/write-back-preview` — admin+marketing only. **Does not** call GHL. Builds a preview payload from outbound/bidirectional mappings. Blocked when credential missing or lead is not GHL-linked. Audits `ghl_write_back_preview`.
+- Lead model extended: `source_of_truth`, `lead_temperature`, `external_source_provider`, `external_source_id`, `external_opportunity_id`, `external_tags`, `external_stage_id`, `external_last_synced_at`, `purchase_amount`. `event_id` on `LeadOut` relaxed to Optional so cross-event GHL contacts don't fail pydantic on sync.
+- Dashboards updated:
+  - `dashboard_global`: adds `leads_by_source`, `leads_by_temperature`, `ghl_mirrored_leads_count` (tenant-scoped).
+  - `dashboard_event`: adds `leads_by_source`, `leads_by_temperature`, and full `ghl_status` block.
+- `.env`: `GHL_READ_SYNC_ENABLED="false"` default (opt-in per environment).
+
+### Frontend
+- New `GhlIntegrationCard.jsx` on Integrations page — dedicated GHL panel with credential save modal (api key + location_id + base_url), status pills for credential/location/mappings/read-sync, required-actions list, tag & pipeline-stage mapping CRUD (with direction), and action buttons: Check status / Preview pull / Sync from GHL. Blocked states surfaced clearly (no misleading language).
+- `EventDetail.jsx` — Leads table now shows `CRM source` (GHL CRM or Local), `Temperature`, `Last synced` columns. A GHL status line + per-source & per-temperature pill row above the table. When `credential_status='missing'`: "GoHighLevel not configured. Leads can still be managed locally, but CRM sync is off."
+
+### Testing
+- **96/96 backend tests passing** (66 regression from Patch 1+2 + 30 new GHL tests in `/app/backend/tests/test_ghl.py`).
+- Coverage: `/ghl/status` behavior (no HTTP call verified via httpx safety monkeypatch), mapping CRUD/vocab/RBAC/tenant isolation/status transitions, pull-preview blocked paths (no credential + read-sync disabled), pull-preview happy path with mocked `ghl_client.fetch_*`, pull-sync RBAC + upsert idempotency + email fallback + tenant isolation + purchase override, write-back-preview blocked paths + happy path with outbound mapping, secret sanitization (raw api_key never appears in `/api/integrations` or `/api/audit-logs`), dashboards include `leads_by_source` / `leads_by_temperature` / `ghl_mirrored_leads_count` / `ghl_status`.
+- Run: `cd /app && pytest backend/tests -q` → **96 passed**.
+
+### Still deferred (post-Patch 3)
+- Real GHL write-back execution (this patch is preview-only)
+- Meta / YouTube / Formaloo / WhatsApp connectors
+- Bulk sync scheduler / cron
+- Splitting `server.py` (now 2199 lines) into `routers/ghl.py`, `routers/dashboard.py`, `routers/kpi.py`
+- `@app.on_event` → FastAPI `lifespan` migration
+- Frontend `.csv` file-upload UI (still uses JSON-rows textarea for KPI import)
+
 ## Backlog
 ### P0 — after MVP feedback
 - Streaming SSE for AI generation (currently non-streaming)
