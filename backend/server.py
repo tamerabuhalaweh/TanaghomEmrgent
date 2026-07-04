@@ -27,6 +27,7 @@ import bcrypt
 
 from crypto_utils import encrypt, decrypt, mask
 import llm_service
+import ghl_client
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,16 @@ PERMISSIONS_BY_ROLE = {
 }
 VALID_INTEGRATION_KINDS = ("gohighlevel", "zapier", "webhook")
 METRIC_SOURCES = ("none", "manual", "imported", "connector")
+
+# GHL vocabularies
+GHL_MAPPING_TYPES = ("tag", "pipeline_stage")
+GHL_MAPPING_TARGET_TYPES = ("lead_status", "lead_temperature")
+GHL_MAPPING_DIRECTIONS = ("inbound", "outbound", "bidirectional")
+LEAD_STATUS_VALUES = (
+    "new", "form_filled", "booked", "purchased",
+    "no_show", "lost", "follow_up_needed",
+)
+LEAD_TEMPERATURE_VALUES = ("cold", "warm", "hot", "buyer")
 
 # Event KPI record schema (verified analytics layer — no external calls).
 KPI_CHANNELS = (
@@ -392,6 +403,7 @@ class LeadIn(BaseModel):
     stage: str = "new"
     tag: Optional[str] = None
     notes: Optional[str] = None
+    lead_temperature: Optional[str] = None
 
 
 class LeadOut(BaseDoc):
@@ -403,6 +415,54 @@ class LeadOut(BaseDoc):
     stage: str
     tag: Optional[str] = None
     notes: Optional[str] = None
+    # CRM-of-truth linkage
+    source_of_truth: str = "local"  # local | gohighlevel
+    lead_temperature: Optional[str] = None  # cold | warm | hot | buyer
+    external_source_provider: Optional[str] = None  # e.g. "gohighlevel"
+    external_source_id: Optional[str] = None
+    external_opportunity_id: Optional[str] = None
+    external_tags: List[str] = []
+    external_stage_id: Optional[str] = None
+    external_last_synced_at: Optional[str] = None
+    purchase_amount: Optional[float] = None
+
+
+# --- GHL models ------------------------------------------------------------
+class GhlMappingIn(BaseModel):
+    mapping_type: str  # tag | pipeline_stage
+    ghl_id: Optional[str] = None
+    ghl_name: str
+    target_type: str   # lead_status | lead_temperature
+    target_value: str
+    direction: str = "inbound"
+
+
+class GhlMappingUpdate(BaseModel):
+    mapping_type: Optional[str] = None
+    ghl_id: Optional[str] = None
+    ghl_name: Optional[str] = None
+    target_type: Optional[str] = None
+    target_value: Optional[str] = None
+    direction: Optional[str] = None
+
+
+class GhlMappingOut(BaseDoc):
+    mapping_type: str
+    ghl_id: Optional[str] = None
+    ghl_name: str
+    target_type: str
+    target_value: str
+    direction: str = "inbound"
+    updated_at: Optional[str] = None
+
+
+class GhlPullIn(BaseModel):
+    event_id: Optional[str] = None
+    limit: int = 50
+
+
+class GhlWriteBackIn(BaseModel):
+    lead_id: str
 
 
 class AuditLogOut(BaseModel):
@@ -1387,6 +1447,446 @@ async def csv_import(
 
 
 # ---------------------------------------------------------------------------
+# Routes: GoHighLevel (source of truth for leads)
+# ---------------------------------------------------------------------------
+def _ghl_read_enabled() -> bool:
+    return os.environ.get("GHL_READ_SYNC_ENABLED", "false").lower() == "true"
+
+
+async def get_ghl_config_for_tenant(tenant_id: str) -> Optional[dict]:
+    """Return the tenant's GHL integration doc with the decrypted key or None."""
+    doc = await db.integrations.find_one(
+        {"tenant_id": tenant_id, "kind": "gohighlevel"}, {"_id": 0}
+    )
+    if not doc:
+        return None
+    api_key = decrypt(doc["api_key_enc"]) if doc.get("api_key_enc") else None
+    config = dict(doc.get("config") or {})
+    return {
+        "integration_id": doc["id"],
+        "api_key": api_key,
+        "config": config,
+        "validated": doc.get("validated", False),
+        "live_sync_enabled": doc.get("live_sync_enabled", False),
+    }
+
+
+def _validate_mapping_body(body: dict) -> Optional[str]:
+    mt = body.get("mapping_type")
+    tt = body.get("target_type")
+    tv = body.get("target_value")
+    direction = body.get("direction", "inbound")
+    if mt not in GHL_MAPPING_TYPES:
+        return f"mapping_type must be one of {GHL_MAPPING_TYPES}"
+    if tt not in GHL_MAPPING_TARGET_TYPES:
+        return f"target_type must be one of {GHL_MAPPING_TARGET_TYPES}"
+    if direction not in GHL_MAPPING_DIRECTIONS:
+        return f"direction must be one of {GHL_MAPPING_DIRECTIONS}"
+    if tt == "lead_status" and tv not in LEAD_STATUS_VALUES:
+        return f"target_value must be one of {LEAD_STATUS_VALUES}"
+    if tt == "lead_temperature" and tv not in LEAD_TEMPERATURE_VALUES:
+        return f"target_value must be one of {LEAD_TEMPERATURE_VALUES}"
+    if mt == "pipeline_stage" and not (body.get("ghl_id") or body.get("ghl_name")):
+        return "pipeline_stage mapping requires ghl_id or ghl_name"
+    if mt == "tag" and not body.get("ghl_name"):
+        return "tag mapping requires ghl_name"
+    return None
+
+
+@api.get("/ghl/mappings", response_model=List[GhlMappingOut])
+async def list_ghl_mappings(user: dict = Depends(current_user)):
+    docs = await db.ghl_mappings.find(_tq(user), {"_id": 0}).to_list(500)
+    return [GhlMappingOut(**d) for d in docs]
+
+
+@api.post("/ghl/mappings", response_model=GhlMappingOut)
+async def create_ghl_mapping(
+    body: GhlMappingIn, actor: dict = Depends(require_role("admin", "marketing")),
+):
+    err = _validate_mapping_body(body.model_dump())
+    if err:
+        raise HTTPException(400, err)
+    doc = GhlMappingOut(
+        **body.model_dump(),
+        tenant_id=actor["tenant_id"],
+        updated_at=_now_iso(),
+    ).model_dump()
+    await db.ghl_mappings.insert_one(doc)
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_mapping_created", object_type="ghl_mapping",
+        object_id=doc["id"],
+        metadata={
+            "mapping_type": doc["mapping_type"], "target_type": doc["target_type"],
+            "target_value": doc["target_value"],
+        },
+    )
+    return GhlMappingOut(**_clean(doc))
+
+
+@api.patch("/ghl/mappings/{mid}", response_model=GhlMappingOut)
+async def update_ghl_mapping(
+    mid: str, body: GhlMappingUpdate,
+    actor: dict = Depends(require_role("admin", "marketing")),
+):
+    update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not update:
+        raise HTTPException(400, "Nothing to update")
+    existing = await db.ghl_mappings.find_one(_tq(actor, {"id": mid}), {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Mapping not found")
+    merged = {**existing, **update}
+    err = _validate_mapping_body(merged)
+    if err:
+        raise HTTPException(400, err)
+    update["updated_at"] = _now_iso()
+    d = await db.ghl_mappings.find_one_and_update(
+        _tq(actor, {"id": mid}), {"$set": update}, return_document=True,
+    )
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_mapping_updated", object_type="ghl_mapping",
+        object_id=mid, metadata={"fields": list(update.keys())},
+    )
+    return GhlMappingOut(**_clean(d))
+
+
+@api.delete("/ghl/mappings/{mid}")
+async def delete_ghl_mapping(
+    mid: str, actor: dict = Depends(require_role("admin", "marketing")),
+):
+    r = await db.ghl_mappings.delete_one(_tq(actor, {"id": mid}))
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_mapping_deleted", object_type="ghl_mapping",
+        object_id=mid, result="success" if r.deleted_count else "failure",
+    )
+    return {"deleted": r.deleted_count}
+
+
+async def _compute_ghl_status(tenant_id: str) -> dict:
+    cfg = await get_ghl_config_for_tenant(tenant_id)
+    credential_status = "configured" if (cfg and cfg.get("api_key")) else "missing"
+    location_id_status = (
+        "configured"
+        if (cfg and (cfg.get("config") or {}).get("location_id"))
+        else "missing"
+    )
+    mappings = await db.ghl_mappings.find({"tenant_id": tenant_id}, {"_id": 0}).to_list(500)
+    types_present = {m.get("mapping_type") for m in mappings}
+    if not mappings:
+        mapping_status = "missing"
+    elif types_present >= {"tag", "pipeline_stage"}:
+        mapping_status = "ready"
+    else:
+        mapping_status = "partial"
+
+    required: list = []
+    if credential_status == "missing":
+        required.append("Provide GoHighLevel API key on the Integrations page.")
+    if location_id_status == "missing":
+        required.append("Provide GHL Location ID in the integration config.")
+    if mapping_status != "ready":
+        required.append("Add at least one tag mapping AND one pipeline stage mapping.")
+    if not _ghl_read_enabled():
+        required.append("Enable GHL_READ_SYNC_ENABLED=true in backend environment to allow API calls.")
+
+    return {
+        "credential_status": credential_status,
+        "location_id_status": location_id_status,
+        "mapping_status": mapping_status,
+        "read_sync_enabled": _ghl_read_enabled(),
+        "write_back_enabled": False,  # Not implemented in this patch
+        "source_of_truth": "gohighlevel",
+        "local_role": "operating_reporting_layer",
+        "required_actions": required,
+        "mappings_count": len(mappings),
+    }
+
+
+@api.get("/ghl/status")
+async def ghl_status(user: dict = Depends(current_user)):
+    return await _compute_ghl_status(user["tenant_id"])
+
+
+def _sync_precheck(cfg: Optional[dict]) -> Optional[dict]:
+    """Return a blocked-response dict if not ready, else None."""
+    if not cfg or not cfg.get("api_key"):
+        return {
+            "status": "blocked",
+            "reason": "GHL credential missing",
+            "required_action": "Save a GoHighLevel API key in Integrations.",
+            "raw_payload_returned": False,
+        }
+    if not (cfg.get("config") or {}).get("location_id"):
+        return {
+            "status": "blocked",
+            "reason": "GHL location_id missing",
+            "required_action": "Set location_id in the GHL integration config.",
+            "raw_payload_returned": False,
+        }
+    if not _ghl_read_enabled():
+        return {
+            "status": "blocked",
+            "reason": "GHL read sync is disabled",
+            "required_action": "Set GHL_READ_SYNC_ENABLED=true in backend environment.",
+            "raw_payload_returned": False,
+        }
+    return None
+
+
+@api.post("/ghl/pull-preview")
+async def ghl_pull_preview(
+    body: GhlPullIn, actor: dict = Depends(require_role("admin", "marketing", "sales")),
+):
+    if body.event_id:
+        ev = await db.events.find_one(_tq(actor, {"id": body.event_id}), {"_id": 0})
+        if not ev:
+            raise HTTPException(404, "Event not found in your workspace")
+
+    cfg = await get_ghl_config_for_tenant(actor["tenant_id"])
+    blocked = _sync_precheck(cfg)
+    if blocked:
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_pull_preview", object_type="ghl",
+            result="blocked", metadata={"reason": blocked["reason"]},
+        )
+        return blocked
+
+    try:
+        raw_contacts = await ghl_client.fetch_contacts(cfg["config"], cfg["api_key"], body.limit)
+        raw_opps = await ghl_client.fetch_opportunities(cfg["config"], cfg["api_key"], body.limit)
+    except Exception as e:
+        log.exception("GHL fetch failed")
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_pull_preview", object_type="ghl",
+            result="failure", metadata={"error": str(e)[:200]},
+        )
+        raise HTTPException(502, f"GHL fetch failed: {e}")
+
+    normalized_contacts = [ghl_client.normalize_ghl_contact(c) for c in raw_contacts]
+    normalized_opps = [ghl_client.normalize_ghl_opportunity(o) for o in raw_opps]
+    mappings = await db.ghl_mappings.find(
+        {"tenant_id": actor["tenant_id"]}, {"_id": 0}
+    ).to_list(500)
+    preview = [
+        ghl_client.map_ghl_lead(c, normalized_opps, mappings)
+        for c in normalized_contacts if c.get("ghl_contact_id")
+    ]
+
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_pull_preview", object_type="ghl",
+        metadata={
+            "contacts_count": len(normalized_contacts),
+            "opportunities_count": len(normalized_opps),
+            "event_id": body.event_id,
+        },
+    )
+    return {
+        "status": "ok",
+        "count": len(preview),
+        "preview": preview,
+        "source_of_truth": "gohighlevel",
+        "raw_payload_returned": False,
+    }
+
+
+@api.post("/ghl/pull-sync")
+async def ghl_pull_sync(
+    body: GhlPullIn, actor: dict = Depends(require_role("admin", "marketing")),
+):
+    if body.event_id:
+        ev = await db.events.find_one(_tq(actor, {"id": body.event_id}), {"_id": 0})
+        if not ev:
+            raise HTTPException(404, "Event not found in your workspace")
+
+    cfg = await get_ghl_config_for_tenant(actor["tenant_id"])
+    blocked = _sync_precheck(cfg)
+    if blocked:
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_pull_sync", object_type="ghl",
+            result="blocked", metadata={"reason": blocked["reason"]},
+        )
+        return blocked
+
+    try:
+        raw_contacts = await ghl_client.fetch_contacts(cfg["config"], cfg["api_key"], body.limit)
+        raw_opps = await ghl_client.fetch_opportunities(cfg["config"], cfg["api_key"], body.limit)
+    except Exception as e:
+        log.exception("GHL fetch failed")
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_pull_sync", object_type="ghl",
+            result="failure", metadata={"error": str(e)[:200]},
+        )
+        raise HTTPException(502, f"GHL fetch failed: {e}")
+
+    normalized_contacts = [ghl_client.normalize_ghl_contact(c) for c in raw_contacts]
+    normalized_opps = [ghl_client.normalize_ghl_opportunity(o) for o in raw_opps]
+    mappings = await db.ghl_mappings.find(
+        {"tenant_id": actor["tenant_id"]}, {"_id": 0}
+    ).to_list(500)
+
+    inserted_count = 0
+    updated_count = 0
+    skipped_count = 0
+    mapped_count = 0
+    warnings: list = []
+    now = _now_iso()
+
+    for c in normalized_contacts:
+        if not c.get("ghl_contact_id"):
+            skipped_count += 1
+            continue
+        mapped = ghl_client.map_ghl_lead(c, normalized_opps, mappings)
+        # Determine target: existing GHL-linked lead first, then email/phone within tenant.
+        existing = await db.leads.find_one(
+            {
+                "tenant_id": actor["tenant_id"],
+                "external_source_provider": "gohighlevel",
+                "external_source_id": c["ghl_contact_id"],
+            },
+            {"_id": 0},
+        )
+        if not existing:
+            fallback: dict = {"tenant_id": actor["tenant_id"]}
+            if c.get("email"):
+                fallback["email"] = c["email"]
+                existing = await db.leads.find_one(fallback, {"_id": 0})
+            if not existing and c.get("phone"):
+                fallback = {"tenant_id": actor["tenant_id"], "phone": c["phone"]}
+                existing = await db.leads.find_one(fallback, {"_id": 0})
+
+        stage = mapped.get("mapped_lead_status") or (existing or {}).get("stage") or "new"
+        temperature = mapped.get("mapped_lead_temperature") or (existing or {}).get("lead_temperature")
+        purchase_amount = mapped.get("monetary_value") if stage == "purchased" else None
+        common = {
+            "tenant_id": actor["tenant_id"],
+            "event_id": body.event_id or (existing or {}).get("event_id"),
+            "name": c.get("name") or (existing or {}).get("name") or "Unknown",
+            "email": c.get("email") or (existing or {}).get("email"),
+            "phone": c.get("phone") or (existing or {}).get("phone"),
+            "source": "ghl",
+            "stage": stage,
+            "lead_temperature": temperature,
+            "notes": (existing or {}).get("notes"),
+            "tag": (existing or {}).get("tag"),
+            "source_of_truth": "gohighlevel",
+            "external_source_provider": "gohighlevel",
+            "external_source_id": c["ghl_contact_id"],
+            "external_opportunity_id": mapped.get("ghl_opportunity_id"),
+            "external_tags": c.get("tags") or [],
+            "external_stage_id": mapped.get("stage_id"),
+            "external_last_synced_at": now,
+            "purchase_amount": purchase_amount,
+        }
+
+        if existing:
+            await db.leads.update_one(
+                {"id": existing["id"], "tenant_id": actor["tenant_id"]},
+                {"$set": common},
+            )
+            updated_count += 1
+        else:
+            new_doc = LeadOut(**common).model_dump()
+            await db.leads.insert_one(new_doc)
+            inserted_count += 1
+
+        if mapped.get("mapped_lead_status") or mapped.get("mapped_lead_temperature"):
+            mapped_count += 1
+        else:
+            warnings.append({
+                "ghl_contact_id": c["ghl_contact_id"],
+                "reason": "no matching tag/stage mapping found",
+            })
+
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_pull_sync", object_type="ghl",
+        metadata={
+            "inserted": inserted_count, "updated": updated_count,
+            "skipped": skipped_count, "mapped": mapped_count,
+            "event_id": body.event_id,
+        },
+    )
+    return {
+        "status": "ok",
+        "inserted_count": inserted_count,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "mapped_count": mapped_count,
+        "warnings": warnings[:50],
+        "raw_payload_returned": False,
+    }
+
+
+@api.post("/ghl/write-back-preview")
+async def ghl_write_back_preview(
+    body: GhlWriteBackIn, actor: dict = Depends(require_role("admin", "marketing")),
+):
+    lead = await db.leads.find_one(_tq(actor, {"id": body.lead_id}), {"_id": 0})
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+
+    cfg = await get_ghl_config_for_tenant(actor["tenant_id"])
+    if not cfg or not cfg.get("api_key"):
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_write_back_preview", object_type="lead",
+            object_id=body.lead_id, result="blocked",
+            metadata={"reason": "GHL credential missing"},
+        )
+        return {
+            "status": "blocked",
+            "reason": "GHL credential missing",
+            "required_action": "Save a GoHighLevel API key in Integrations.",
+            "raw_payload_returned": False,
+        }
+
+    if not lead.get("external_source_id") or lead.get("external_source_provider") != "gohighlevel":
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action="ghl_write_back_preview", object_type="lead",
+            object_id=body.lead_id, result="blocked",
+            metadata={"reason": "Lead is not GHL-linked"},
+        )
+        return {
+            "status": "blocked",
+            "reason": "Lead is not GHL-linked",
+            "required_action": "Import lead from GHL first, or link an existing GHL contact.",
+            "raw_payload_returned": False,
+        }
+
+    mappings = await db.ghl_mappings.find(
+        {
+            "tenant_id": actor["tenant_id"],
+            "direction": {"$in": ["outbound", "bidirectional"]},
+        },
+        {"_id": 0},
+    ).to_list(500)
+    payload = ghl_client.build_write_back_payload(lead, mappings)
+    await audit(
+        tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+        action="ghl_write_back_preview", object_type="lead",
+        object_id=body.lead_id,
+        metadata={
+            "tags_to_apply_count": len(payload.get("tags", [])),
+            "custom_fields_count": len(payload.get("custom_fields", {})),
+        },
+    )
+    return {
+        "status": "preview",
+        "would_send": payload,
+        "note": "This is a preview only. No call has been made to GoHighLevel.",
+        "raw_payload_returned": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Routes: Audit logs
 # ---------------------------------------------------------------------------
 @api.get("/audit-logs", response_model=List[AuditLogOut])
@@ -1461,11 +1961,23 @@ async def _lead_metrics(tenant_id: str, event_id: Optional[str] = None) -> dict:
         q["event_id"] = event_id
     leads = await db.leads.find(q, {"_id": 0}).to_list(5000)
     stages = {"new": 0, "form_filled": 0, "booked": 0, "purchased": 0, "no_show": 0}
+    by_source = {"gohighlevel": 0, "local": 0}
+    by_temperature = {"cold": 0, "warm": 0, "hot": 0, "buyer": 0}
     for lead in leads:
         s = lead.get("stage", "new")
         if s in stages:
             stages[s] += 1
-    return {"total_leads_collection": len(leads), **{f"leads_{k}": v for k, v in stages.items()}}
+        sot = lead.get("source_of_truth") or "local"
+        by_source[sot] = by_source.get(sot, 0) + 1
+        temp = lead.get("lead_temperature")
+        if temp in by_temperature:
+            by_temperature[temp] += 1
+    return {
+        "total_leads_collection": len(leads),
+        **{f"leads_{k}": v for k, v in stages.items()},
+        "leads_by_source": by_source,
+        "leads_by_temperature": by_temperature,
+    }
 
 
 def _safe_ratio(num: float, denom: float) -> float:
@@ -1605,6 +2117,9 @@ async def dashboard_event(event_id: str, user: dict = Depends(current_user)):
             for ch in kpi["channel_breakdown"]
         ],
         "trend": kpi["trend"],
+        "leads_by_source": lm["leads_by_source"],
+        "leads_by_temperature": lm["leads_by_temperature"],
+        "ghl_status": await _compute_ghl_status(tid),
         **_status_block(kpi["records_count"]),
     }
 

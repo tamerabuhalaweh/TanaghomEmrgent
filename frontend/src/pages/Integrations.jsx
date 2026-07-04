@@ -4,6 +4,7 @@ import Modal from "../components/Modal";
 import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { Plus, Trash2, Plug, ShieldAlert } from "lucide-react";
+import GhlIntegrationCard from "../components/GhlIntegrationCard";
 import { toast } from "sonner";
 
 const KINDS = [
@@ -54,6 +55,11 @@ export default function Integrations() {
           </button>
         }
       />
+
+      {/* GoHighLevel — full-featured card (source of truth for leads) */}
+      <div className="mb-6">
+        <GhlIntegrationCard />
+      </div>
 
       {/* Catalog */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

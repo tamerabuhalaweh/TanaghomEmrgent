@@ -372,8 +372,28 @@ export default function EventDetail() {
 
         {/* Leads */}
         <div className="card-flat p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">Leads</h2>
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight text-slate-900">Leads</h2>
+              {dash?.ghl_status && (
+                <p className="text-xs text-slate-500 mt-1" data-testid="event-ghl-status-line">
+                  {dash.ghl_status.credential_status === "missing"
+                    ? "GoHighLevel not configured. Leads can still be managed locally, but CRM sync is off."
+                    : `GHL: ${dash.ghl_status.credential_status} · Mappings: ${dash.ghl_status.mapping_status} · Read sync: ${dash.ghl_status.read_sync_enabled ? "on" : "off"}`}
+                </p>
+              )}
+              {dash?.leads_by_source && (
+                <div className="flex flex-wrap gap-1 mt-2" data-testid="event-leads-by-source">
+                  <span className="badge-pill badge-orange">GHL CRM · {dash.leads_by_source.gohighlevel || 0}</span>
+                  <span className="badge-pill badge-slate">Local · {dash.leads_by_source.local || 0}</span>
+                  {["cold", "warm", "hot", "buyer"].map((k) => (
+                    <span key={k} className="badge-pill badge-blue">
+                      {k} · {(dash.leads_by_temperature || {})[k] || 0}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setOpenL(true)}
               className="btn btn-outline"
@@ -394,9 +414,10 @@ export default function EventDetail() {
                   <tr className="border-b border-slate-100">
                     <th className="text-start py-2">{t("name")}</th>
                     <th className="text-start py-2">{t("email")}</th>
-                    <th className="text-start py-2">Source</th>
+                    <th className="text-start py-2">CRM source</th>
+                    <th className="text-start py-2">Temperature</th>
                     <th className="text-start py-2">Stage</th>
-                    <th className="text-start py-2">Tag</th>
+                    <th className="text-start py-2">Last synced</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -404,7 +425,27 @@ export default function EventDetail() {
                     <tr key={l.id} className="border-b border-slate-50" data-testid={`lead-row-${l.id}`}>
                       <td className="py-2 font-medium text-slate-900">{l.name}</td>
                       <td className="py-2 mono text-xs text-slate-600">{l.email}</td>
-                      <td className="py-2 text-slate-600">{l.source}</td>
+                      <td className="py-2">
+                        <span className={`badge-pill ${
+                          l.source_of_truth === "gohighlevel" ? "badge-orange" : "badge-slate"
+                        }`}>
+                          {l.source_of_truth === "gohighlevel" ? "GHL CRM" : "Local"}
+                        </span>
+                      </td>
+                      <td className="py-2">
+                        {l.lead_temperature ? (
+                          <span className={`badge-pill ${
+                            l.lead_temperature === "buyer" ? "badge-green"
+                            : l.lead_temperature === "hot" ? "badge-red"
+                            : l.lead_temperature === "warm" ? "badge-orange"
+                            : "badge-blue"
+                          }`}>
+                            {l.lead_temperature}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="py-2">
                         <span className={`badge-pill ${
                           l.stage === "purchased" ? "badge-green"
@@ -415,7 +456,11 @@ export default function EventDetail() {
                           {l.stage}
                         </span>
                       </td>
-                      <td className="py-2 text-slate-600">{l.tag || "—"}</td>
+                      <td className="py-2 mono text-[11px] text-slate-500">
+                        {l.external_last_synced_at
+                          ? new Date(l.external_last_synced_at).toLocaleString()
+                          : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
