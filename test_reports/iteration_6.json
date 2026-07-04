@@ -1,0 +1,25 @@
+{
+  "summary": "Patch 4 Event Strategy Planner + Sales Execution Workflow — created /app/backend/tests/test_planner.py with 33 focused tests using `requests` against the live backend (same pattern as test_kpi.py) to avoid TestClient event-loop conflicts with test_ghl.py when xdist puts both files on the same worker. Covers CRUD for all 7 planner resources (parametrized), RBAC write matrix per role including new `social` role, viewer/all-roles GET access, POST+PATCH enum validation (asset_type/goal/channel/approval_status), tenant isolation (cross-event 404 + list-doesn't-leak), audit action names for create/update/delete on all 7 resources, planner summary content overdue rule, approved counts, budget_by_channel (planned+actual+variance sorted alphabetically, plus KPI-only channel), sales task open/overdue rule, dark_ads_by_status counts, event-dashboard 'planner' block inclusion, global dashboard exclusion, no send-* routes, empty summary → zeros, cross-tenant summary → 404. Full suite result: 129 passed (96 existing + 33 new). Zero regressions.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_planner.py",
+    "/app/test_reports/pytest/planner_full_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 2519 lines. Consider extracting PLANNER_RESOURCES + _register_planner + _planner_summary into routers/planner.py. Same recommendation as Patch 3.",
+    "Model validation errors surface as HTTP 422 in _create (raise HTTPException(422, str(e))); enum validation returns 400. Inconsistent status codes between Pydantic-caught errors (422) and enum-caught errors (400). Consider unifying — both are client-input errors so 400 is the RFC-conformant choice.",
+    "PATCH accepts arbitrary keys (`body: dict`) — no Pydantic re-validation. Only enum whitelist is applied to the *merged* doc. Sending unknown fields (e.g. {'notes': 'x'} on BudgetPlan which has `notes: Optional[str]`, or completely unknown keys on models that lack them) is silently persisted. Consider validating PATCH bodies against a partial-of-Model or an allowed-field whitelist.",
+    "Global dashboard endpoint (/api/dashboard) is not clearly delineated in the code review — test_global_dashboard_excludes_planner is defensive (only asserts if 200). If a global dashboard exists it must not include planner. Verified via test — no 'planner' key appears.",
+    "Two @app.on_event handlers remain deprecated (previously reported in iteration 5). No new occurrences added in Patch 4."
+  ],
+  "updated_files": ["/app/backend/tests/test_planner.py"],
+  "success_rate": {"backend": "100% (129/129)", "frontend": "n/a"},
+  "test_credentials": "admin@campaign.ai / Admin@12345 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Module-scoped: Tenant B via Motor (id starts random uuid, name TEST_PLANNER_TenantB); marketing/sales/social/viewer users via API (email prefix TEST_planner_); events named TEST_PLANNER_* per sub-test scenario. Module teardown deletes tenant B + all TEST_PLANNER_ events / users and all planner-collection rows for both tenants.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run full suite via `cd /app/backend && python -m pytest tests/ -q` (uses -n 2 --dist loadscope from pytest.ini). 129 tests pass. IMPORTANT: test_planner.py uses `requests` against REACT_APP_BACKEND_URL — NOT TestClient — because TestClient across multiple test files sharing one xdist worker triggers 'Task attached to a different loop' RuntimeErrors from server.py's module-level Motor client. If a future test file must use TestClient, put it in a conftest.py-shared fixture, don't create a second `with TestClient(server.app) as c` in another module. To debug test_planner alone: `python -m pytest tests/test_planner.py -q -n 0`.",
+  "rca of the issue": "n/a — no bugs. Patch 4 implementation verified end-to-end."
+}

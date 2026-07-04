@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -144,11 +144,12 @@ async def audit(
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-ROLES = ("admin", "marketing", "sales", "viewer")
+ROLES = ("admin", "marketing", "sales", "social", "viewer")
 PERMISSIONS_BY_ROLE = {
     "admin": ["*"],
-    "marketing": ["events.read", "events.write", "campaigns.write", "posts.write", "ai.generate", "dashboard.read"],
-    "sales": ["events.read", "leads.write", "dashboard.read"],
+    "marketing": ["events.read", "events.write", "campaigns.write", "posts.write", "ai.generate", "dashboard.read", "planner.write"],
+    "sales": ["events.read", "leads.write", "dashboard.read", "planner.sales"],
+    "social": ["events.read", "content.write", "dark_ads.write", "dashboard.read"],
     "viewer": ["events.read", "dashboard.read"],
 }
 VALID_INTEGRATION_KINDS = ("gohighlevel", "zapier", "webhook")
@@ -1889,6 +1890,322 @@ async def ghl_write_back_preview(
 
 
 # ---------------------------------------------------------------------------
+# Planner (Execution Plan): 7 collections + summary
+# ---------------------------------------------------------------------------
+CONTENT_STATUS = ("planned", "in_progress", "pending_review", "approved", "blocked", "done")
+CONTENT_ASSET_TYPES = ("video", "image", "carousel", "reel", "story", "landing_page", "email_copy", "whatsapp_copy", "other")
+CONTENT_PLATFORMS = ("instagram", "meta", "youtube", "whatsapp", "email", "landing_page", "other")
+PLAN_APPROVAL = ("draft", "pending_review", "approved", "changes_requested")
+EMAIL_STATUS = ("planned", "active", "completed", "blocked")
+EMAIL_GOALS = ("awareness", "nurture", "upsell", "reminder", "last_chance", "post_event")
+WHATSAPP_GOALS = ("reminder", "nurture", "sales_follow_up", "urgency", "post_event")
+WHATSAPP_CONTENT_TYPES = ("text", "image", "video", "link", "mixed")
+UPSELL_CHANNELS = ("email", "whatsapp", "sales_call", "ghl_workflow", "mixed")
+BUDGET_CHANNELS = ("meta", "instagram", "youtube", "whatsapp", "email", "organic", "dark_ad", "referral", "other")
+DARK_AD_STATUS = ("planned", "active", "paused", "completed", "blocked")
+DARK_AD_PLATFORMS = ("meta", "instagram", "youtube", "other")
+DARK_AD_FORMATS = ("video", "image", "carousel", "reel", "story", "other")
+DARK_AD_OBJECTIVES = ("leads", "conversions", "awareness", "retargeting")
+SALES_TASK_STATUS = ("open", "in_progress", "done", "blocked")
+SALES_TASK_TYPES = ("call", "whatsapp_reply", "meeting_follow_up", "no_show_follow_up", "payment_follow_up", "lead_review", "other")
+
+
+class ContentReqIn(BaseModel):
+    title: str
+    asset_type: str
+    platform: str
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    owner_role: Optional[str] = None
+    status: str = "planned"
+    notes: Optional[str] = None
+
+
+class EmailPlanIn(BaseModel):
+    sequence_name: str
+    audience_segment: Optional[str] = None
+    email_count: int = 1
+    planned_send_dates: List[str] = []
+    subject_draft: Optional[str] = None
+    body_draft: Optional[str] = None
+    goal: str
+    approval_status: str = "draft"
+    status: str = "planned"
+
+
+class WhatsappPlanIn(BaseModel):
+    audience_segment: Optional[str] = None
+    frequency: Optional[str] = None
+    content_type: str = "text"
+    message_draft: Optional[str] = None
+    goal: str
+    approval_status: str = "draft"
+    status: str = "planned"
+
+
+class UpsellPlanIn(BaseModel):
+    target_segment: str
+    offer: str
+    fomo_angle: Optional[str] = None
+    planned_channel: str
+    expected_outcome: Optional[str] = None
+    approval_status: str = "draft"
+    status: str = "planned"
+
+
+class BudgetPlanIn(BaseModel):
+    channel: str
+    planned_budget: float = 0.0
+    expected_leads: int = 0
+    expected_purchases: int = 0
+    expected_revenue: float = 0.0
+    notes: Optional[str] = None
+
+
+class DarkAdPlanIn(BaseModel):
+    campaign_name: str
+    audience_definition: Optional[str] = None
+    platform: str
+    creative_format: str
+    objective: str
+    planned_budget: float = 0.0
+    status: str = "planned"
+    notes: Optional[str] = None
+
+
+class SalesTaskIn(BaseModel):
+    title: str
+    task_type: str
+    owner_role: Optional[str] = None
+    related_lead_id: Optional[str] = None
+    due_date: Optional[str] = None
+    status: str = "open"
+    notes: Optional[str] = None
+
+
+PLANNER_RESOURCES = [
+    {"path": "content-requirements", "coll": "event_content_requirements",
+     "obj": "content_requirement", "model": ContentReqIn,
+     "write_roles": ("admin", "marketing", "social"),
+     "enums": {"asset_type": CONTENT_ASSET_TYPES, "platform": CONTENT_PLATFORMS, "status": CONTENT_STATUS}},
+    {"path": "email-plans", "coll": "event_email_plans",
+     "obj": "email_plan", "model": EmailPlanIn,
+     "write_roles": ("admin", "marketing"),
+     "enums": {"goal": EMAIL_GOALS, "approval_status": PLAN_APPROVAL, "status": EMAIL_STATUS}},
+    {"path": "whatsapp-plans", "coll": "event_whatsapp_plans",
+     "obj": "whatsapp_plan", "model": WhatsappPlanIn,
+     "write_roles": ("admin", "marketing", "sales"),
+     "enums": {"goal": WHATSAPP_GOALS, "content_type": WHATSAPP_CONTENT_TYPES,
+               "approval_status": PLAN_APPROVAL, "status": EMAIL_STATUS}},
+    {"path": "upsell-plans", "coll": "event_upsell_plans",
+     "obj": "upsell_plan", "model": UpsellPlanIn,
+     "write_roles": ("admin", "marketing", "sales"),
+     "enums": {"planned_channel": UPSELL_CHANNELS, "approval_status": PLAN_APPROVAL, "status": EMAIL_STATUS}},
+    {"path": "budget-plans", "coll": "event_budget_plans",
+     "obj": "budget_plan", "model": BudgetPlanIn,
+     "write_roles": ("admin", "marketing"),
+     "enums": {"channel": BUDGET_CHANNELS}},
+    {"path": "dark-ad-plans", "coll": "event_dark_ad_plans",
+     "obj": "dark_ad_plan", "model": DarkAdPlanIn,
+     "write_roles": ("admin", "marketing", "social"),
+     "enums": {"platform": DARK_AD_PLATFORMS, "creative_format": DARK_AD_FORMATS,
+               "objective": DARK_AD_OBJECTIVES, "status": DARK_AD_STATUS}},
+    {"path": "sales-tasks", "coll": "event_sales_tasks",
+     "obj": "sales_task", "model": SalesTaskIn,
+     "write_roles": ("admin", "marketing", "sales"),
+     "enums": {"task_type": SALES_TASK_TYPES, "status": SALES_TASK_STATUS}},
+]
+
+
+def _register_planner(spec: dict) -> None:
+    path = spec["path"]
+    coll = spec["coll"]
+    obj = spec["obj"]
+    Model = spec["model"]
+    write_roles = spec["write_roles"]
+    enums = spec.get("enums", {})
+
+    def _check_enums(payload: dict) -> Optional[str]:
+        for field, allowed in enums.items():
+            v = payload.get(field)
+            if v is not None and v not in allowed:
+                return f"{field} must be one of {allowed}"
+        return None
+
+    @api.get(f"/events/{{event_id}}/{path}", name=f"list_{coll}")
+    async def _list(event_id: str, user: dict = Depends(current_user)):
+        await _resolve_event_and_campaign(user["tenant_id"], event_id, None)
+        docs = await db[coll].find(
+            _tq(user, {"event_id": event_id}), {"_id": 0}
+        ).sort("created_at", -1).to_list(1000)
+        return docs
+
+    @api.post(f"/events/{{event_id}}/{path}", name=f"create_{coll}")
+    async def _create(
+        event_id: str,
+        body: dict = Body(...),
+        actor: dict = Depends(require_role(*write_roles)),
+    ):
+        try:
+            parsed = Model(**body)
+        except Exception as e:
+            raise HTTPException(422, str(e))
+        await _resolve_event_and_campaign(actor["tenant_id"], event_id, None)
+        payload = parsed.model_dump()
+        err = _check_enums(payload)
+        if err:
+            raise HTTPException(400, err)
+        doc = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": actor["tenant_id"],
+            "event_id": event_id,
+            **payload,
+            "created_by": actor["id"],
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        await db[coll].insert_one(doc)
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action=f"{obj}_created", object_type=obj, object_id=doc["id"],
+            metadata={"event_id": event_id},
+        )
+        doc.pop("_id", None)
+        return doc
+
+    @api.patch(f"/events/{{event_id}}/{path}/{{item_id}}", name=f"update_{coll}")
+    async def _update(
+        event_id: str, item_id: str, body: dict,
+        actor: dict = Depends(require_role(*write_roles)),
+    ):
+        for r in ("id", "_id", "created_at", "tenant_id", "event_id", "created_by"):
+            body.pop(r, None)
+        existing = await db[coll].find_one(
+            _tq(actor, {"id": item_id, "event_id": event_id}), {"_id": 0}
+        )
+        if not existing:
+            raise HTTPException(404, f"{obj} not found")
+        merged = {**existing, **body}
+        err = _check_enums(merged)
+        if err:
+            raise HTTPException(400, err)
+        body["updated_at"] = _now_iso()
+        d = await db[coll].find_one_and_update(
+            _tq(actor, {"id": item_id, "event_id": event_id}),
+            {"$set": body}, return_document=True,
+        )
+        if not d:
+            raise HTTPException(404, f"{obj} not found")
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action=f"{obj}_updated", object_type=obj, object_id=item_id,
+            metadata={"event_id": event_id, "fields": list(body.keys())},
+        )
+        d.pop("_id", None)
+        return d
+
+    @api.delete(f"/events/{{event_id}}/{path}/{{item_id}}", name=f"delete_{coll}")
+    async def _delete(
+        event_id: str, item_id: str,
+        actor: dict = Depends(require_role(*write_roles)),
+    ):
+        r = await db[coll].delete_one(
+            _tq(actor, {"id": item_id, "event_id": event_id})
+        )
+        await audit(
+            tenant_id=actor["tenant_id"], actor_user_id=actor["id"],
+            action=f"{obj}_deleted", object_type=obj, object_id=item_id,
+            result="success" if r.deleted_count else "failure",
+        )
+        if r.deleted_count == 0:
+            raise HTTPException(404, f"{obj} not found")
+        return {"deleted": r.deleted_count}
+
+
+for _spec in PLANNER_RESOURCES:
+    _register_planner(_spec)
+
+
+async def _planner_summary(tenant_id: str, event_id: str) -> dict:
+    q = {"tenant_id": tenant_id, "event_id": event_id}
+    contents = await db.event_content_requirements.find(q, {"_id": 0}).to_list(1000)
+    emails = await db.event_email_plans.find(q, {"_id": 0}).to_list(1000)
+    whatsapps = await db.event_whatsapp_plans.find(q, {"_id": 0}).to_list(1000)
+    upsells = await db.event_upsell_plans.find(q, {"_id": 0}).to_list(1000)
+    budgets = await db.event_budget_plans.find(q, {"_id": 0}).to_list(1000)
+    darks = await db.event_dark_ad_plans.find(q, {"_id": 0}).to_list(1000)
+    tasks = await db.event_sales_tasks.find(q, {"_id": 0}).to_list(1000)
+    kpi_docs = await db.event_kpi_records.find(q, {"_id": 0}).to_list(5000)
+
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    overdue_content = [
+        c for c in contents
+        if c.get("due_date") and c["due_date"] < today and c.get("status") != "done"
+    ]
+    approved_emails = sum(1 for e in emails if e.get("approval_status") == "approved")
+    approved_whatsapps = sum(1 for w in whatsapps if w.get("approval_status") == "approved")
+    approved_upsells = sum(1 for u in upsells if u.get("approval_status") == "approved")
+
+    planned_by_channel: dict = {}
+    for b in budgets:
+        ch = b.get("channel", "other")
+        planned_by_channel[ch] = planned_by_channel.get(ch, 0.0) + float(b.get("planned_budget", 0) or 0)
+
+    actual_by_channel: dict = {}
+    for k in kpi_docs:
+        ch = k.get("channel", "other")
+        actual_by_channel[ch] = actual_by_channel.get(ch, 0.0) + float(k.get("spend", 0) or 0)
+
+    channels = set(planned_by_channel) | set(actual_by_channel)
+    budget_by_channel = []
+    for ch in sorted(channels):
+        p = planned_by_channel.get(ch, 0.0)
+        a = actual_by_channel.get(ch, 0.0)
+        budget_by_channel.append({
+            "channel": ch, "planned": round(p, 2), "actual": round(a, 2),
+            "variance": round(p - a, 2),
+        })
+
+    open_tasks = [t for t in tasks if t.get("status") in ("open", "in_progress")]
+    overdue_tasks = [
+        t for t in open_tasks
+        if t.get("due_date") and t["due_date"] < today
+    ]
+
+    darks_by_status: dict = {}
+    for d in darks:
+        s = d.get("status", "planned")
+        darks_by_status[s] = darks_by_status.get(s, 0) + 1
+
+    return {
+        "counts": {
+            "content_requirements": len(contents),
+            "overdue_content": len(overdue_content),
+            "email_plans": len(emails),
+            "approved_email_plans": approved_emails,
+            "whatsapp_plans": len(whatsapps),
+            "approved_whatsapp_plans": approved_whatsapps,
+            "upsell_plans": len(upsells),
+            "approved_upsell_plans": approved_upsells,
+            "budget_plans": len(budgets),
+            "dark_ad_plans": len(darks),
+            "sales_tasks": len(tasks),
+            "open_sales_tasks": len(open_tasks),
+            "overdue_sales_tasks": len(overdue_tasks),
+        },
+        "budget_by_channel": budget_by_channel,
+        "dark_ads_by_status": darks_by_status,
+    }
+
+
+@api.get("/events/{event_id}/planner/summary")
+async def planner_summary(event_id: str, user: dict = Depends(current_user)):
+    await _resolve_event_and_campaign(user["tenant_id"], event_id, None)
+    return await _planner_summary(user["tenant_id"], event_id)
+
+
+# ---------------------------------------------------------------------------
 # Routes: Audit logs
 # ---------------------------------------------------------------------------
 @api.get("/audit-logs", response_model=List[AuditLogOut])
@@ -2125,6 +2442,7 @@ async def dashboard_event(event_id: str, user: dict = Depends(current_user)):
         "leads_by_source": lm["leads_by_source"],
         "leads_by_temperature": lm["leads_by_temperature"],
         "ghl_status": await _compute_ghl_status(tid),
+        "planner": await _planner_summary(tid, event_id),
         **_status_block(kpi["records_count"]),
     }
 

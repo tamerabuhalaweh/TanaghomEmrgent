@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import Modal from "../components/Modal";
 import EventKpiPanel from "../components/EventKpiPanel";
+import PlannerSection from "../components/PlannerSection";
 import {
   Plus, Megaphone, Trash2, Sparkles, ArrowLeft, Calendar as CalIcon, MapPin, Info, CheckCircle2,
 } from "lucide-react";
@@ -297,6 +298,11 @@ export default function EventDetail() {
 
         {/* Verified KPI records + CSV import */}
         <EventKpiPanel eventId={id} onChanged={load} />
+
+        {/* Execution plan (content, email, whatsapp, upsell, budget, dark ads, sales tasks) */}
+        <div className="mb-8">
+          <PlannerSection eventId={id} />
+        </div>
 
         {/* Campaigns */}
         <div className="card-flat p-5 mb-8">

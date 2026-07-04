@@ -6,7 +6,7 @@ import { useI18n } from "../lib/i18n";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-const ROLES = ["admin", "marketing", "sales", "viewer"];
+const ROLES = ["admin", "marketing", "sales", "social", "viewer"];
 
 const EMPTY = { name: "", email: "", password: "", role: "marketing" };
 
